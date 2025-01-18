@@ -265,7 +265,6 @@ export class Traveler {
      * @param pos
      * @returns {boolean}
      */
-
     public static isExit(pos: Coord): boolean {
         return pos.x === 0 || pos.y === 0 || pos.x === 49 || pos.y === 49
     }
@@ -276,7 +275,6 @@ export class Traveler {
      * @param pos2
      * @returns {boolean}
      */
-
     public static sameCoord(pos1: Coord, pos2: Coord): boolean {
         return pos1.x === pos2.x && pos1.y === pos2.y
     }
@@ -287,7 +285,6 @@ export class Traveler {
      * @param pos2
      * @returns {boolean}
      */
-
     public static samePos(pos1: RoomPosition, pos2: RoomPosition): boolean {
         return this.sameCoord(pos1, pos2) && pos1.roomName === pos2.roomName
     }
@@ -298,7 +295,6 @@ export class Traveler {
      * @param color
      * @param opacity
      */
-
     public static circle(pos: RoomPosition, color: string, opacity?: number): void {
         new RoomVisual(pos.roomName).circle(pos, {
             radius: 0.45,
@@ -313,7 +309,6 @@ export class Traveler {
      * update memory on whether a room should be avoided based on controller owner
      * @param room
      */
-
     public static updateRoomStatus(room: Room): void {
         if (!room) {
             return
@@ -334,7 +329,6 @@ export class Traveler {
      * @param options
      * @returns {PathfinderReturn}
      */
-
     public static findTravelPath(
         origin: RoomPosition | _HasRoomPosition,
         destination: RoomPosition | _HasRoomPosition,
@@ -453,7 +447,6 @@ export class Traveler {
      * @param options
      * @returns {{}}
      */
-
     public static findRoute(
         origin: string,
         destination: string,
@@ -532,7 +525,6 @@ export class Traveler {
      * @param destination
      * @returns {number}
      */
-
     public static routeDistance(origin: string, destination: string): number | void {
         const linearDistance = Game.map.getRoomLinearDistance(origin, destination)
         if (linearDistance >= 32) {
@@ -551,7 +543,6 @@ export class Traveler {
      * @param freshMatrix
      * @returns {any}
      */
-
     public static getStructureMatrix(room: Room, freshMatrix?: boolean): CostMatrix {
         if (!this.structureMatrixCache[room.name] || (freshMatrix && Game.time !== this.structureMatrixTick)) {
             this.structureMatrixTick = Game.time
@@ -566,7 +557,6 @@ export class Traveler {
      * @param room
      * @returns {any}
      */
-
     public static getCreepMatrix(room: Room): CostMatrix {
         if (!this.creepMatrixCache[room.name] || Game.time !== this.creepMatrixTick) {
             this.creepMatrixTick = Game.time
@@ -582,7 +572,6 @@ export class Traveler {
      * @param roadCost
      * @returns {CostMatrix}
      */
-
     public static addStructuresToMatrix(room: Room, matrix: CostMatrix, roadCost: number): CostMatrix {
         const impassibleStructures: Structure[] = []
         for (const structure of room.find<AnyStructure>(FIND_STRUCTURES)) {
