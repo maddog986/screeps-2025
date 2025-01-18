@@ -1,3 +1,5 @@
+import { TravelData, Traveler } from 'utils/Traveler'
+import { partsCost } from 'utils/utils'
 
 declare global {
   // Memory extension samples
@@ -6,15 +8,21 @@ declare global {
     log: any
   }
 
+  interface RoomMemory {
+    avoid?: boolean
+  }
+
   interface CreepMemory {
     role: ROLE
     room: string
     task?: TASK
     target?: Id<_HasId>
+    target_time?: number
     last_target?: Id<_HasId>
     work?: ScreepsReturnCode | CreepActionReturnCode | -100
     move?: CreepMoveReturnCode | ERR_NO_PATH | ERR_INVALID_TARGET | ERR_NOT_FOUND | -100
     transfer?: ScreepsReturnCode | -100
+    _trav?: TravelData
   }
 
   // Syntax for adding proprties to `global` (ex "global.log")
@@ -29,6 +37,7 @@ enum ROLE {
   'harvester' = 'harvester',
   'mule' = 'mule',
   'builder' = 'builder',
+  'upgrader' = 'upgrader',
 };
 
 enum TASK {
@@ -39,6 +48,7 @@ enum TASK {
   withdraw = 'withdraw',
   transfer = 'transfer',
   construct = 'construct',
+  repair = 'repair'
 }
 
 type CreepSetup = {
@@ -48,21 +58,164 @@ type CreepSetup = {
   }
 }
 
-const creepSetup = {
-  [ROLE.harvester]: {
-    body: [WORK, CARRY, MOVE],
-    max: 3,
+const jobs = {
+  'build': function (this: CreepBaseClass): boolean {
+    // find a construction site
+    const target_build = this.creep.pos.findClosestByPath(FIND_MY_CONSTRUCTION_SITES)
+
+    if (target_build) {
+      this.setTarget(target_build, TASK.construct)
+      return true
+    }
+
+    return false
   },
-  [ROLE.builder]: {
-    body: [CARRY, WORK, MOVE, MOVE],
-    max: 2,
+
+  'repair': function (this: CreepBaseClass): boolean {
+    // only check for repairs every 5 ticks
+    if (Game.time % 5 !== 0) {
+      return false
+    }
+
+    // find repairable structure
+    const target_repair = this.creep.pos.findClosestByPath(FIND_STRUCTURES, {
+      filter: ({ hits, hitsMax }) => hits < hitsMax
+    })
+
+    if (target_repair) {
+      this.setTarget(target_repair, TASK.repair)
+      return true
+    }
+
+    return false
   },
-  [ROLE.mule]: {
-    body: [CARRY, CARRY, MOVE, MOVE],
-    max: 2,
+
+  'refill_spawn': function (this: CreepBaseClass): boolean {
+    // transfer resources to a spawn
+    const target_spawn = this.creep.pos.findClosestByPath(FIND_MY_SPAWNS, {
+      filter: ({ store }) => store.getFreeCapacity(RESOURCE_ENERGY) > 0
+    })
+
+    if (target_spawn) {
+      this.setTarget(target_spawn, TASK.refill_spawn)
+      return true
+    }
+
+    return false
+  },
+
+  'refill_upgrader': function (this: CreepBaseClass): boolean {
+    // get all upgraders
+    const upgraders = Object.values(Game.creeps)
+      .filter(({ my, store, memory: { role } }) => my && role === ROLE.upgrader && store.getFreeCapacity() >= 10)
+
+    // no upgraders with free capacity
+    if (upgraders.length === 0) {
+      return false
+    }
+
+    const mules = Object.values(Game.creeps).filter(({ memory: { role, task, target } }) => role === ROLE.mule && task === TASK.transfer)
+
+    // filter out upgraders that already have a mule assigned to it
+    const upgraders_that_need_it = upgraders.filter((upgrader) => {
+      const my_range = this.creep.pos.getRangeTo(upgrader.pos)
+
+      const mule = mules.find(({ pos, memory: { target } }) => target === upgrader.id && pos.getRangeTo(upgrader) < my_range)
+
+      return !mule
+    })
+
+    // no upgraders with free capacity and no tasks
+    if (upgraders_that_need_it.length === 0) {
+      return false
+    }
+
+    // get upgraders with the least amount of energy
+    const target = upgraders_that_need_it.reduce((a, b) => a.store.getFreeCapacity() < b.store.getFreeCapacity() ? a : b)
+
+    // // transfer resources to a upgrader
+    // const target = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
+    //   filter: ({ id, memory: { role }, store }) => store.getFreeCapacity(RESOURCE_ENERGY) >= 5 &&
+    //     [ROLE.upgrader].includes(role) &&
+    //     this.last_target !== id
+    // })
+
+    if (target) {
+      this.setTarget(target, TASK.transfer)
+      return true
+    }
+
+    return false
+  },
+
+  'refill_builder': function (this: CreepBaseClass): boolean {
+    // transfer resources to a builder
+    const target_builder = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
+      filter: ({ id, memory: { role }, store }) => store.getFreeCapacity(RESOURCE_ENERGY) >= 5 &&
+        [ROLE.builder].includes(role) &&
+        this.last_target !== id
+    })
+
+    if (target_builder) {
+      this.setTarget(target_builder, TASK.transfer)
+      return true
+    }
+
+    return false
+  },
+
+  'upgrade_controller': function (this: CreepBaseClass): boolean {
+    // upgrade controller
+    const target_controller = this.creep.pos.findClosestByPath(FIND_STRUCTURES, {
+      filter: ({ structureType }) => structureType === STRUCTURE_CONTROLLER
+    })
+
+    if (target_controller) {
+      this.setTarget(target_controller, TASK.upgrade_controller)
+      return true
+    }
+
+    return false
+  },
+
+  'withdraw_harvester': function (this: CreepBaseClass): boolean {
+    const withdraw_from = [ROLE.harvester]
+
+    if (this.creep.memory.role !== ROLE.mule) {
+      withdraw_from.push(ROLE.mule)
+    }
+
+    // take resources from another creep
+    const target = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
+      filter: ({ id, memory: { role, transfer, task }, store }) => store.getUsedCapacity(RESOURCE_ENERGY) >= 15 &&
+        withdraw_from.includes(role) &&
+        transfer !== OK &&
+        task !== TASK.refill_spawn &&
+        this.creep.id !== id
+    })
+
+    if (target) {
+      this.setTarget(target, TASK.withdraw)
+      return true
+    }
+
+    return false
+  },
+
+  'harvest': function (this: CreepBaseClass): boolean {
+    // find a energy source
+    const target = this.creep.pos.findClosestByPath(FIND_SOURCES, {
+      filter: ({ energy }) => energy > 0
+    })
+
+    if (target) {
+      this.setTarget(target, TASK.harvest)
+      return true
+    }
+
+    return false
   }
 }
-
 
 
 
@@ -73,7 +226,7 @@ const creepSetup = {
 
 class CreepBaseClass {
   creep: Creep
-  target: _HasId | undefined | null
+  target: _HasId | _HasRoomPosition | undefined | null
 
   // move: CreepMoveReturnCode | ERR_NO_PATH | ERR_INVALID_TARGET | ERR_NOT_FOUND | -100 = -100
   // transfer: ScreepsReturnCode | -100 = -100
@@ -85,6 +238,10 @@ class CreepBaseClass {
     this.move = -100
     this.transfer = -100
     this.work = -100
+
+    if (!this.creep.memory.target_time) this.creep.memory.target_time = -1
+
+    this.creep.memory.target_time++
   }
 
   get work() {
@@ -134,6 +291,7 @@ class CreepBaseClass {
 
       this.creep.memory.task = task
       this.creep.memory.target = target.id
+      this.creep.memory.target_time = 0
       this.creep.memory.last_target = target.id
     } else {
       this.clearTarget()
@@ -146,6 +304,10 @@ class CreepBaseClass {
 
   hasUsedCapacity(resource: ResourceConstant | undefined = undefined) {
     return this.creep.store.getUsedCapacity(resource) > 0
+  }
+
+  findJob(find_jobs: Array<keyof typeof jobs>) {
+    return (find_jobs).some((target) => jobs[target].call(this))
   }
 
   findTarget() {
@@ -184,6 +346,8 @@ class CreepBaseClass {
       this.withdrawResource()
     } else if (this.task === TASK.construct) {
       this.construct()
+    } else if (this.task === TASK.repair) {
+      this.repair()
     }
   }
 
@@ -195,10 +359,16 @@ class CreepBaseClass {
       return
     }
 
-    this.move = this.creep.moveTo((this.target as unknown as _HasRoomPosition), { reusePath: 10, visualizePathStyle: { stroke: "#ffffff" } })
+    this.move = Traveler.travelTo(this.creep, this.target as _HasRoomPosition);
   }
 
   upgradeController() {
+    // empty?
+    if (!this.hasUsedCapacity()) {
+      this.clearTarget()
+      return
+    }
+
     // already done this tick
     if ([OK, ERR_TIRED].includes(this.work as any)) {
       return
@@ -214,9 +384,20 @@ class CreepBaseClass {
   }
 
   transferResource(resource: ResourceConstant = RESOURCE_ENERGY) {
+    // empty?
+    if (!this.hasUsedCapacity()) {
+      this.clearTarget()
+      return
+    }
+
     // already done this tick
     if ([OK, ERR_TIRED].includes(this.transfer as any)) {
       return
+    }
+
+    // save a transfer request
+    if (this.target instanceof Creep && this.target.memory.transfer === OK) {
+      return this.withdrawResource()
     }
 
     this.transfer = this.creep.transfer(this.target as any, resource)
@@ -229,6 +410,12 @@ class CreepBaseClass {
   }
 
   withdrawResource(resource: ResourceConstant = RESOURCE_ENERGY) {
+    // already full?
+    if (!this.hasFreeCapacity()) {
+      this.clearTarget()
+      return
+    }
+
     // already done this tick
     if ([OK, ERR_TIRED].includes(this.transfer as any)) {
       return
@@ -266,6 +453,12 @@ class CreepBaseClass {
   }
 
   construct() {
+    // empty?
+    if (!this.hasUsedCapacity()) {
+      this.clearTarget()
+      return
+    }
+
     // already work done work this tick
     if ([OK, ERR_TIRED].includes(this.work as any)) {
       return
@@ -279,155 +472,230 @@ class CreepBaseClass {
       this.moveToTarget()
     }
   }
+
+  repair() {
+    // empty?
+    if (!this.hasUsedCapacity()) {
+      this.clearTarget()
+      return
+    }
+
+    // already work done work this tick
+    if ([OK, ERR_TIRED].includes(this.work as any)) {
+      return
+    }
+
+    this.work = this.creep.repair(this.target as any)
+
+    if ([ERR_INVALID_TARGET, ERR_NOT_ENOUGH_RESOURCES].includes(this.work as any) || !this.hasUsedCapacity()) {
+      this.clearTarget()
+    } else if (this.work === ERR_NOT_IN_RANGE) {
+      this.moveToTarget()
+    }
+
+    // clear target if at max hits
+    if (this.target && 'hits' in this.target && 'hitsMax' in this.target && this.target.hits === this.target.hitsMax) {
+      this.clearTarget()
+    }
+  }
 }
 
-
-
-
 class Harvester extends CreepBaseClass {
-  constructor(creep: Creep) {
-    super(creep);
-  }
-
   findTarget() {
     // can an find energy source
     if (this.hasFreeCapacity()) {
-      const target3 = this.creep.pos.findClosestByPath(FIND_SOURCES, {
-        filter: ({ energy }) => energy > 0
-      })
-
-      if (target3) {
-        this.setTarget(target3, TASK.harvest)
-        return
-      }
+      this.findJob(['harvest'])
     }
-
-    // count mules spawned
-    const mules = Object.values(Game.creeps).filter(({ memory: { role } }) => role === ROLE.mule).length
 
     // can the creep do something with stored energy?
-    if (this.hasUsedCapacity() && mules === 0) {
+    if (this.hasUsedCapacity()) {
+      // count mules spawned
+      const mules = Object.values(Game.creeps).filter(({ memory: { role } }) => role === ROLE.mule).length
 
-      // find a spawm that needs energy
-      const target = this.creep.pos.findClosestByPath(FIND_MY_SPAWNS, {
-        filter: ({ store }) => store.getFreeCapacity(RESOURCE_ENERGY) > 0
-      })
-
-      if (target) {
-        this.setTarget(target, TASK.refill_spawn)
-        return
+      if (mules === 0) {
+        this.findJob(['refill_spawn', 'upgrade_controller'])
       }
+    }
+  }
 
-      const target2 = this.creep.pos.findClosestByPath(FIND_STRUCTURES, {
-        filter: ({ structureType }) => structureType === STRUCTURE_CONTROLLER
-      })
+  run() {
+    super.run()
 
-      if (target2) {
-        this.setTarget(target2, TASK.upgrade_controller)
-        return
+    // if already transfered, return
+    if (this.transfer === OK) {
+      return
+    }
+
+    // find a mule creep nearby to transfer to
+    const mule = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
+      filter: ({ memory: { role, transfer, task }, store }) => store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
+        role === ROLE.mule
+    })
+
+    if (mule) {
+      this.transfer = this.creep.transfer(mule, RESOURCE_ENERGY)
+
+      // if mules target is self, clear target
+      if (mule.memory.target === this.creep.id) {
+        delete mule.memory.task
+        delete mule.memory.target
       }
     }
 
+    // if already transfered, return
+    if (this.transfer === OK) {
+      return
+    }
 
+    // find a harvester nearby to transfer a small amount to
+    const harvester = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
+      filter: ({ memory: { role }, store }) => store.getFreeCapacity(RESOURCE_ENERGY) >= 5 &&
+        role === ROLE.harvester
+    })
+
+    if (harvester) {
+      this.transfer = this.creep.transfer(harvester, RESOURCE_ENERGY, Math.min(5, harvester.store.getFreeCapacity(RESOURCE_ENERGY), this.creep.store.getUsedCapacity(RESOURCE_ENERGY)))
+    }
+
+    // if already transfered, return
+    if (this.transfer === OK) {
+      return
+    }
+
+    // pickup dropped energy if not full
+    if (this.creep.store.getFreeCapacity() > 0) {
+      const dropped_energy = this.creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+        filter: ({ resourceType }) => resourceType === RESOURCE_ENERGY
+      })
+      if (dropped_energy) {
+        this.transfer = this.creep.pickup(dropped_energy)
+      }
+    }
   }
 }
 
-
-
-
 class Mule extends CreepBaseClass {
-  constructor(creep: Creep) {
-    super(creep)
-  }
-
   findTarget() {
-    // can an find energy source
-    if (this.creep.store.getFreeCapacity(RESOURCE_ENERGY) >= 40) {
-      const target3 = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
-        filter: ({ id, memory: { role }, store }) => store.getUsedCapacity(RESOURCE_ENERGY) >= 10 &&
-          [ROLE.harvester].includes(role) &&
-          this.last_target !== id
+    if (this.creep.store.getFreeCapacity() > 0) {
+      // harvesters within 3 range
+      const harvesters = this.creep.pos.findInRange(FIND_MY_CREEPS, 4, {
+        filter: ({ id, store, memory: { role, task, transfer } }) => role === ROLE.harvester &&
+          store.getUsedCapacity() >= 5 && id !== this.last_target
       })
 
-      if (target3) {
-        this.setTarget(target3, TASK.withdraw)
-        return
+      if (harvesters.length > 0) {
+        const harvester = this.creep.pos.findClosestByPath(harvesters)
+        if (harvester) {
+          this.setTarget(harvester, TASK.withdraw)
+          return
+        }
       }
     }
 
     // can the creep do something with stored energy?
     if (!this.target && this.hasUsedCapacity()) {
-      // find a spawm that needs energy
-      const target = this.creep.pos.findClosestByPath(FIND_MY_SPAWNS, {
-        filter: ({ store }) => store.getFreeCapacity(RESOURCE_ENERGY) > 0
-      })
+      this.findJob(['refill_spawn', 'refill_upgrader', 'refill_builder'])
+    }
 
-      if (target) {
-        this.setTarget(target, TASK.refill_spawn)
-        return
-      }
-
-      // transfer resources to a builder
-      const target2 = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
-        filter: ({ id, memory: { role }, store }) => store.getFreeCapacity(RESOURCE_ENERGY) >= 5 &&
-          [ROLE.builder].includes(role) &&
-          this.last_target !== id
-      })
-
-      if (target2) {
-        this.setTarget(target2, TASK.transfer)
-        return
-      }
+    // can an find energy source
+    if (!this.target && this.creep.store.getFreeCapacity() >= 25) {
+      this.findJob(['withdraw_harvester'])
     }
   }
 }
 
 class Builder extends CreepBaseClass {
-  constructor(creep: Creep) {
-    super(creep)
-  }
-
   findTarget() {
     // can the creep do something with stored energy?
     if (this.hasUsedCapacity()) {
-      const target_build = this.creep.pos.findClosestByPath(FIND_MY_CONSTRUCTION_SITES)
-
-      if (target_build) {
-        this.setTarget(target_build, TASK.construct)
-        return
-      }
-
-      const target_controller = this.creep.pos.findClosestByPath(FIND_STRUCTURES, {
-        filter: ({ structureType }) => structureType === STRUCTURE_CONTROLLER
-      })
-
-      if (target_controller) {
-        this.setTarget(target_controller, TASK.upgrade_controller)
-        return
-      }
+      this.findJob(['build', 'repair', 'upgrade_controller'])
     }
 
-    // can an find energy source
+    // find an energy source
     if (this.hasFreeCapacity()) {
-      const target2 = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
-        filter: ({ memory: { role, transfer, task }, store }) => store.getUsedCapacity(RESOURCE_ENERGY) >= 15 &&
-          [ROLE.harvester, ROLE.mule].includes(role) &&
-          transfer !== OK &&
-          task !== TASK.refill_spawn
-      })
-
-      if (target2) {
-        this.setTarget(target2, TASK.withdraw)
-        return
-      }
+      this.findJob(['withdraw_harvester'])
     }
   }
 
   upgradeController() {
     super.upgradeController();
-    this.clearTarget();
+
+    // clear target every 10 ticks
+    if (this.creep.memory.target_time && this.creep.memory.target_time % 10 === 0) {
+      this.clearTarget()
+    }
+  }
+
+  repair() {
+    super.repair();
+
+    // clear target every 10 ticks
+    if (this.creep.memory.target_time && this.creep.memory.target_time % 10 === 0) {
+      this.clearTarget()
+    }
   }
 }
+
+class Upgrader extends CreepBaseClass {
+  constructor(creep: Creep) {
+    super(creep)
+  }
+
+  findTarget() {
+    this.findJob(['upgrade_controller'])
+  }
+
+  upgradeController() {
+    // already done this tick
+    if ([OK, ERR_TIRED].includes(this.work as any)) {
+      return
+    }
+
+    if (!this.creep.pos.inRangeTo(this.target as StructureController, 3)) {
+      this.moveToTarget()
+      return
+    }
+
+    this.work = this.creep.upgradeController(this.target as StructureController)
+
+    if (this.work === ERR_NOT_IN_RANGE) {
+      this.moveToTarget()
+    }
+  }
+
+  run() {
+    super.run()
+
+    // if we are not below half, return
+    if (this.creep.store.getFreeCapacity() < this.creep.store.getCapacity() / 2) {
+      return
+    }
+
+    // only run every 3 ticks
+    if (Game.time % 3 !== 0) {
+      return
+    }
+
+    // find nearby upgrader to share energy with
+    const upgraders = this.creep.pos.findInRange(FIND_MY_CREEPS, 1, {
+      filter: ({ store, memory: { role, task, transfer } }) => role === ROLE.upgrader &&
+        transfer !== OK &&
+        store.getUsedCapacity() >= this.creep.store.getUsedCapacity() &&
+        store.getUsedCapacity() > 20
+    })
+
+    if (upgraders) {
+      for (const upgrader of upgraders) {
+          upgrader.memory.transfer = upgrader.transfer(this.creep, RESOURCE_ENERGY, 10)
+      }
+    }
+  }
+}
+
+
+
+
+
 
 
 export const loop = () => {
@@ -440,18 +708,75 @@ export const loop = () => {
     }
   }
 
+
+  const myCreeps: Array<Harvester | Builder | Mule> = []
+
+  // loop my creeps
+  for (const name in Game.creeps) {
+    const creep = Game.creeps[name]
+
+    // if not my creep, skip
+    if (!creep.my) {
+      continue
+    }
+
+    if (creep.memory.role === ROLE.harvester) {
+      myCreeps.push(new Harvester(creep))
+    } else if (creep.memory.role === ROLE.mule) {
+      myCreeps.push(new Mule(creep))
+    } else if (creep.memory.role === ROLE.builder) {
+      myCreeps.push(new Builder(creep))
+    } else if (creep.memory.role === ROLE.upgrader) {
+      myCreeps.push(new Upgrader(creep))
+    }
+  }
+
+  // run my creeps
+  for (const creep of myCreeps) {
+    creep.run()
+  }
+
+
   // loop each room
-  for (const room in Game.rooms) {
+  for (const room_name in Game.rooms) {
+    const room = Game.rooms[room_name]
+
     // is room mine?
-    if (Game.rooms[room].controller?.my) {
+    if (room.controller?.my) {
+      // controller level
+      const controller_level = room.controller.level
+
+      const creepSetup = {
+        [ROLE.harvester]: {
+          body: [WORK, CARRY, MOVE],
+          max: 3,
+        },
+        [ROLE.builder]: {
+          body: [CARRY, WORK, MOVE, MOVE],
+          max: controller_level >= 2 ? 1 : 0,
+        },
+        [ROLE.mule]: {
+          body: [CARRY, CARRY, MOVE, MOVE],
+          max: 2 + Math.floor(controller_level/2),
+        },
+        [ROLE.upgrader]: {
+          body: [CARRY, WORK, WORK, MOVE],
+          max: controller_level
+        }
+      }
+
+      if (controller_level >= 3) {
+        creepSetup[ROLE.harvester].max = 3
+        creepSetup[ROLE.harvester].body = [WORK, WORK, CARRY, MOVE]
+      }
 
       // find my spawns
-      const spawns = Game.rooms[room].find(FIND_MY_SPAWNS)
+      const spawns = room.find(FIND_MY_SPAWNS)
 
       // loop my spawns
       for (const spawn of spawns) {
         // if not my spawn, skip
-        if (spawn.room.name !== room) {
+        if (spawn.room.name !== room_name) {
           continue
         }
 
@@ -481,14 +806,29 @@ export const loop = () => {
             continue
           }
 
-          // spawn a creep
-          const newName = `${role.slice(0, 1).toUpperCase()}_${Game.time}`
+          if (partsCost(creepSetup[role].body) > spawn.room.energyAvailable) {
+            continue
+          }
+
+          // figure a new name
+          const newName = (() => {
+            let name = role.slice(0, 1).toUpperCase()
+            let i = 1
+
+            while (!!Game.creeps[`${name}_${i}`]) {
+              i++
+            }
+
+            return `${name}_${i}`;
+          })()
+
+          //`${role.slice(0, 1).toUpperCase()}_${Game.time}`
 
           // spawn the creep
           const spawned = spawn.spawnCreep(creepSetup[role].body, newName, {
             memory: {
               role,
-              room
+              room: room_name
             },
           })
 
@@ -501,30 +841,36 @@ export const loop = () => {
         }
       }
     }
-  }
 
-  const myCreeps: Array<Harvester | Builder | Mule> = []
+    // find all dropped resources
+    const dropped_resources = room.find(FIND_DROPPED_RESOURCES)
 
-  // loop my creeps
-  for (const name in Game.creeps) {
-    const creep = Game.creeps[name]
+    // find all creeps
+    const creeps = Object.values(Game.creeps)
+      .filter(({ my, room: _room, memory: { transfer } }) => my && _room.name === room.name && transfer !== OK)
 
-    // if not my creep, skip
-    if (!creep.my) {
-      continue
+    // loop dropped resources
+    for (const dropped_resource of dropped_resources) {
+      // loop creeps
+      for (const creep of creeps) {
+        // if not my creep, skip
+        if (!creep.my) {
+          continue
+        }
+
+        // if creep is full, skip
+        if (creep.store.getFreeCapacity() === 0) {
+          continue
+        }
+
+        // if creep is too far away, skip
+        if (creep.pos.getRangeTo(dropped_resource) > 1) {
+          continue
+        }
+
+        // pickup dropped resource
+        creep.pickup(dropped_resource)
+      }
     }
-
-    if (creep.memory.role === ROLE.harvester) {
-      myCreeps.push(new Harvester(creep))
-    } else if (creep.memory.role === ROLE.mule) {
-      myCreeps.push(new Mule(creep))
-    } else if (creep.memory.role === ROLE.builder) {
-      myCreeps.push(new Builder(creep))
-    }
-  }
-
-  // run my creeps
-  for (const creep of myCreeps) {
-    creep.run()
   }
 }
