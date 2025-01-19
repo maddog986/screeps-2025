@@ -1,5 +1,4 @@
-import { ASSIGNMENT } from 'utils/jobs'
-import { CreepBaseClass, ROLE } from './CreepBaseClass'
+import { ASSIGNMENT, CreepBaseClass, ROLE } from './CreepBaseClass'
 
 export default class Upgrader extends CreepBaseClass {
   findTarget() {

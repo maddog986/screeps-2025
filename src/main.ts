@@ -5,7 +5,7 @@ import Harvester from 'utils/creeps/Harvester'
 import Mule from 'utils/creeps/Mule'
 import Upgrader from 'utils/creeps/Upgrader'
 import { TravelData } from 'utils/Traveler'
-import { createBody, partsCost } from 'utils/utils'
+import { createBody, partsCost, walkablePositions } from 'utils/utils'
 
 declare global {
   // Memory extension samples
@@ -107,9 +107,38 @@ export const loop = () => {
 
       const creepSetup: CreateSetup = cache.getItem('creepSetup', 5, () => {
 
+
+
+        let room_energy = Math.min(700, room.energyCapacityAvailable)
+        let sources = room.find(FIND_SOURCES)
+        let source_walkable_positions = sources
+          .reduce((acc, s) => {
+            return acc + walkablePositions(s)
+          }, 0)
+
+        let harvester_body: BodyPartConstant[] = []
+        let ticks_until_empty = 0
+
+        while (ticks_until_empty <= 250) {
+          source_walkable_positions -= 0.50
+          harvester_body = createBody([WORK, CARRY, CARRY], room_energy)
+
+          const work_parts_total = harvester_body.filter((part) => part === WORK).length
+          const energy_per_tick = work_parts_total * HARVEST_POWER * Math.ceil(source_walkable_positions)
+
+          ticks_until_empty = sources.length * SOURCE_ENERGY_CAPACITY / energy_per_tick
+        }
+
+
+
+
+        const spawns_positions = room.find(FIND_MY_SPAWNS).reduce((acc, spawn) => {
+          return acc + walkablePositions(spawn)
+        }, 0)
+
         const creepSetup: CreateSetup = {
           [ROLE.harvester]: {
-            body: [WORK, CARRY, MOVE],
+            body: [CARRY, CARRY, WORK, MOVE],
             max: 3,
           },
           [ROLE.builder]: {
@@ -118,7 +147,7 @@ export const loop = () => {
           },
           [ROLE.mule]: {
             body: [CARRY, CARRY, MOVE, MOVE],
-            max: 2,
+            max: 1,
           },
           [ROLE.upgrader]: {
             body: [CARRY, WORK, WORK, MOVE],
@@ -126,34 +155,27 @@ export const loop = () => {
           }
         }
 
-        const room_total_energy = Math.min(Math.max(300, room.energyAvailable), room.energyCapacityAvailable)
-        // console.log(Game.time, `controller_level ${controller_level} room_total_energy ${room_total_energy}`)
-
-        // calcuate given the harvester body work parts, how long would it take to exhaust a full source?
-        // const body_parts = createBody([CARRY, WORK], room_total_energy)
-        // const harvest_per_tick = (body_parts.filter((part) => part === WORK).length * HARVEST_POWER) * creepSetup[ROLE.harvester].max
-        // console.log('harvest_per_tick:', harvest_per_tick)
-
-        const mules = Object.values(Game.creeps).filter(({ ticksToLive, room, memory: { role } }) =>
-          // must be a mule
-          role === ROLE.mule &&
-          // must be in same
-          room.name === room_name &&
-          // must have a long life ahead
-          (ticksToLive === undefined || ticksToLive > 150)
-
-        ).length > 0
+        const mules = Object.values(Game.creeps)
+          .filter(({ ticksToLive, room, memory: { role } }) =>
+            // must be a mule
+            role === ROLE.mule &&
+            // must be in same
+            room.name === room_name &&
+            // must have a long life ahead
+            (ticksToLive === undefined || ticksToLive > 150)
+          ).length > 0
 
         if (controller_level >= 2) {
-          creepSetup[ROLE.harvester].max = Math.min(3, controller_level + 1)
-          creepSetup[ROLE.harvester].body = createBody(mules ? [WORK, WORK, CARRY, CARRY] : [WORK, CARRY, MOVE], room_total_energy)
-
           if (mules) {
+            creepSetup[ROLE.harvester].body = harvester_body
+            creepSetup[ROLE.harvester].max = Math.floor(source_walkable_positions)
+
+            creepSetup[ROLE.upgrader].body = createBody([CARRY, CARRY, WORK, WORK], room_energy)
             creepSetup[ROLE.upgrader].max = controller_level
-            creepSetup[ROLE.upgrader].body = createBody([CARRY, CARRY, WORK, WORK], room_total_energy)
           }
 
-          creepSetup[ROLE.mule].body = createBody([CARRY, CARRY, MOVE, MOVE], room_total_energy)
+          //creepSetup[ROLE.mule].body = createBody([CARRY, CARRY, MOVE, MOVE], room_energy)
+          // creepSetup[ROLE.mule].max = Math.ceil(Object.values(Game.creeps).filter(({ room, memory: { role } }) => room.name === room_name && [ROLE.harvester, ROLE.upgrader, ROLE.builder].includes(role as any)).length * 0.3)
         }
 
         // console.log('harvester body:', creepSetup[ROLE.harvester].body)

@@ -1,31 +1,41 @@
-import { ASSIGNMENT } from 'utils/jobs'
-import { CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
+import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
 
 export default class Harvester extends CreepBaseClass {
     findTarget() {
+        const has_move_part = this.creep.body.some(({ type }) => type === MOVE)
+
         // can an find energy source
-        if (this.hasFreeCapacity()) {
+        if (!has_move_part || this.hasFreeCapacity()) {
             this.findJob([ASSIGNMENT.harvest])
         }
 
         // can the creep do something with stored energy?
-        if (this.hasUsedCapacity()) {
+        if (has_move_part && this.hasUsedCapacity()) {
             // count mules spawned
             const mules = Object.values(Game.creeps).filter(({ memory: { role } }) => role === ROLE.mule).length
 
             if (mules === 0) {
-                this.findJob([ASSIGNMENT.refill_spawn, ASSIGNMENT.upgrade_controller])
+                this.findJob([ASSIGNMENT.refill_spawn])
             }
         }
-
-        super.findTarget()
     }
 
     harvest(): any {
-        if (this.target && this.creep.memory.target_time && this.creep.memory.target_time > 0) {
-            if (this.target instanceof Source && this.target.energy === 0) {
-                return false // wait for energy to come back
-            }
+        // if (this.target && this.creep.memory.target_time && this.creep.memory.target_time > 0) {
+        //     if (this.target instanceof Source && this.target.energy === 0) {
+        //         return false // wait for energy to come back
+        //     }
+        // }
+
+        // if (this.target instanceof Source && this.target.energy === 0) {
+        //     return this.clearTarget() // wait for energy to come back
+        // }
+
+        const work_parts = this.creep.body.filter(({ type }) => type === WORK).length
+        const move_parts = this.creep.body.filter(({ type }) => type === MOVE).length
+
+        if (move_parts === 0 && this.creep.store.getFreeCapacity() < work_parts * HARVEST_POWER) {
+            return
         }
 
         super.harvest()
@@ -42,7 +52,7 @@ export default class Harvester extends CreepBaseClass {
         // find a mule creep nearby to transfer to
         const mule = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
             filter: ({ memory: { role, transfer, job }, store }) => store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
-                [ROLE.mule, ROLE.builder].includes(role as any) && job !== JOB.assist
+                [ROLE.mule, ROLE.builder, ROLE.upgrader].includes(role as any) && job !== JOB.assist
         })
 
         if (mule) {

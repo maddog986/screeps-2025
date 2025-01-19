@@ -1,5 +1,5 @@
-import { ASSIGNMENT } from 'utils/jobs'
-import { CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
+import { Traveler } from 'utils/Traveler'
+import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
 
 export default class Mule extends CreepBaseClass {
   findTarget() {
@@ -41,5 +41,42 @@ export default class Mule extends CreepBaseClass {
     }
 
     super.findTarget()
+  }
+
+  run() {
+    super.run()
+
+    if (this.target) return
+    if (this.move_code === OK) return
+
+    const spawn = this.creep.pos.findClosestByPath(FIND_MY_SPAWNS)
+    if (!spawn) return
+
+    const spot = parseInt(this.creep.name.slice(-1))
+    // top right of spawn
+    if (spot === 1) {
+      // move it
+      this.move_code = Traveler.travelTo(this.creep, new RoomPosition(spawn.pos.x + 1, spawn.pos.y - 1, spawn.pos.roomName), {
+        ignoreCreeps: true,
+      })
+    }
+    // bottom right of spawn
+    else if (spot === 2) {
+      this.move_code = Traveler.travelTo(this.creep, new RoomPosition(spawn.pos.x + 1, spawn.pos.y + 1, spawn.pos.roomName), {
+        ignoreCreeps: true,
+      })
+    }
+    // top left of spawn
+    else if (spot === 3) {
+      this.move_code = Traveler.travelTo(this.creep, new RoomPosition(spawn.pos.x - 1, spawn.pos.y - 1, spawn.pos.roomName), {
+        ignoreCreeps: true,
+      })
+    }
+    // bottom left of spawn
+    else if (spot === 4) {
+      this.move_code = Traveler.travelTo(this.creep, new RoomPosition(spawn.pos.x - 1, spawn.pos.y + 1, spawn.pos.roomName), {
+        ignoreCreeps: true,
+      })
+    }
   }
 }

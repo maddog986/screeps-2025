@@ -5,8 +5,24 @@ export const partsCost = function (parts: BodyPartConstant[]): number {
 }
 
 export const createBody = function (parts: BodyPartConstant[], energyAvailable: number): BodyPartConstant[] {
-    const parts_cost = partsCost(parts)
-    return Array(Math.floor(energyAvailable / parts_cost)).fill(parts).flat()
+    let parts_cost = partsCost(parts)
+
+    // use as much as energyAvailable as possible by doubling the body parts until we reach the energyAvailable
+    while (parts_cost <= energyAvailable) {
+        if (parts_cost + partsCost(parts) > energyAvailable) {
+            return parts
+        }
+
+        parts = parts.concat(parts)
+        parts_cost += parts_cost
+    }
+
+    // if we have more than energyAvailable, remove the last part
+    if (parts_cost > energyAvailable) {
+        parts.pop()
+    }
+
+    return parts
 }
 
 export const walkablePositions = (target: _HasId & _HasRoomPosition & { room: Room }, dist = 1): number => {

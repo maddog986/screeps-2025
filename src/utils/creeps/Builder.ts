@@ -1,5 +1,4 @@
-import { ASSIGNMENT } from 'utils/jobs'
-import { CreepBaseClass, ROLE } from './CreepBaseClass'
+import { ASSIGNMENT, CreepBaseClass, ROLE } from './CreepBaseClass'
 
 export default class Builder extends CreepBaseClass {
   findTarget() {
@@ -21,7 +20,7 @@ export default class Builder extends CreepBaseClass {
 
     // find an energy source
     if (this.hasFreeCapacity()) {
-      this.findJob([ASSIGNMENT.withdraw_harvester, ASSIGNMENT.harvest])
+      this.findJob([ASSIGNMENT.harvest, ASSIGNMENT.withdraw_harvester])
     }
 
     super.findTarget()
