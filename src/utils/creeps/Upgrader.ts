@@ -1,4 +1,5 @@
-import { ASSIGNMENT, CreepBaseClass, ROLE } from './CreepBaseClass'
+import utils from 'utils/utils'
+import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
 
 export default class Upgrader extends CreepBaseClass {
   findTarget() {
@@ -28,28 +29,57 @@ export default class Upgrader extends CreepBaseClass {
   run() {
     super.run()
 
-    // if we are not below half, return
-    if (this.creep.store.getFreeCapacity() < this.creep.store.getCapacity() / 2) {
-      return
-    }
+    // // if we are not below half, return
+    // if (this.creep.store.getFreeCapacity() < this.creep.store.getCapacity() / 2) {
+    //   return
+    // }
 
-    // only run every 3 ticks
-    if (Game.time % 3 !== 0) {
-      return
-    }
+    // // only run every 3 ticks
+    // if (Game.time % 3 !== 0) {
+    //   return
+    // }
+
+    if (this.transfer_code === OK || !this.hasUsedCapacity()) return
 
     // find nearby upgrader to share energy with
-    const upgraders = this.creep.pos.findInRange(FIND_MY_CREEPS, 1, {
-      filter: ({ store, memory: { role, transfer } }) => role === ROLE.upgrader &&
-        transfer !== OK &&
-        store.getUsedCapacity() >= this.creep.store.getUsedCapacity() &&
-        store.getUsedCapacity() > 20
+    const upgrader = this.creep.pos.findInRange(FIND_MY_CREEPS, 1, {
+      filter: ({ id, store, memory: { role, transfer } }) =>
+        role === ROLE.upgrader &&
+        id !== this.creep.id &&
+        store.getFreeCapacity() > this.creep.store.getFreeCapacity()
     })
+      .sort((a, b) => a.store.getFreeCapacity() - b.store.getFreeCapacity())
+      .shift()
 
-    if (upgraders) {
-      for (const upgrader of upgraders) {
-        upgrader.memory.transfer = upgrader.transfer(this.creep, RESOURCE_ENERGY, 10)
-      }
+    if (upgrader) {
+      this.transfer_code = this.creep.transfer(upgrader, RESOURCE_ENERGY, Math.floor(this.creep.store.getUsedCapacity(RESOURCE_ENERGY) / 8))
     }
+  }
+}
+
+export const UpgraderSetup = (room: Room) => {
+  let room_energy = Math.min(600, Math.max(300, room.energyCapacityAvailable))
+
+  let max = 1
+  let body: BodyPartConstant[] = utils.createBody([CARRY, CARRY, WORK, WORK], room_energy)
+
+  const room_creeps = Object.values(Game.creeps).filter(({ my, ticksToLive, room: { name } }) => my && name === room.name && (!ticksToLive || ticksToLive > 100))
+
+  const mule_counts = room_creeps.filter(({ memory: { role } }) => role === ROLE.mule).length
+  const harvester_counts = room_creeps.filter(({ store, memory: { role } }) => role === ROLE.harvester && store.getUsedCapacity(RESOURCE_ENERGY) > 10).length
+
+  const empty_upgrader_found = room_creeps.some(({ store, memory: { role } }) => role === ROLE.upgrader && store.getUsedCapacity(RESOURCE_ENERGY) === 0)
+  if (empty_upgrader_found || mule_counts === 0 || harvester_counts === 0) return { max: 0, body: [] }
+
+  const full_harvesters = room_creeps.some(({ store, memory: { role } }) => role === ROLE.harvester && store.getUsedCapacity(RESOURCE_ENERGY) === store.getCapacity(RESOURCE_ENERGY))
+  if (full_harvesters) max++
+
+  const total_alive_upgraders = room_creeps.filter(({ memory: { role } }) => role === ROLE.upgrader).length
+  const idle_mules = room_creeps.filter(({ store, memory: { role, job } }) => role === ROLE.mule && job === JOB.idle && store.getUsedCapacity(RESOURCE_ENERGY) >= 50)
+  if (idle_mules.length > 0) max += idle_mules.length
+
+  return {
+    max,
+    body
   }
 }

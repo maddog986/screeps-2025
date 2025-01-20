@@ -1,4 +1,5 @@
-import { Traveler } from 'utils/Traveler'
+import Traveler from 'utils/Traveler'
+import utils from 'utils/utils'
 import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
 
 export default class Mule extends CreepBaseClass {
@@ -56,27 +57,42 @@ export default class Mule extends CreepBaseClass {
     // top right of spawn
     if (spot === 1) {
       // move it
-      this.move_code = Traveler.travelTo(this.creep, new RoomPosition(spawn.pos.x + 1, spawn.pos.y - 1, spawn.pos.roomName), {
-        ignoreCreeps: true,
-      })
+      this.move_code = Traveler.move(this.creep, new RoomPosition(spawn.pos.x + 1, spawn.pos.y - 1, spawn.pos.roomName))
     }
     // bottom right of spawn
     else if (spot === 2) {
-      this.move_code = Traveler.travelTo(this.creep, new RoomPosition(spawn.pos.x + 1, spawn.pos.y + 1, spawn.pos.roomName), {
-        ignoreCreeps: true,
-      })
+      this.move_code = Traveler.move(this.creep, new RoomPosition(spawn.pos.x + 1, spawn.pos.y + 1, spawn.pos.roomName))
     }
     // top left of spawn
     else if (spot === 3) {
-      this.move_code = Traveler.travelTo(this.creep, new RoomPosition(spawn.pos.x - 1, spawn.pos.y - 1, spawn.pos.roomName), {
-        ignoreCreeps: true,
-      })
+      this.move_code = Traveler.move(this.creep, new RoomPosition(spawn.pos.x - 1, spawn.pos.y - 1, spawn.pos.roomName))
     }
     // bottom left of spawn
     else if (spot === 4) {
-      this.move_code = Traveler.travelTo(this.creep, new RoomPosition(spawn.pos.x - 1, spawn.pos.y + 1, spawn.pos.roomName), {
-        ignoreCreeps: true,
-      })
+      this.move_code = Traveler.move(this.creep, new RoomPosition(spawn.pos.x - 1, spawn.pos.y + 1, spawn.pos.roomName))
     }
+  }
+}
+
+export const MuleSetup = (room: Room) => {
+  let room_energy = Math.min(400, Math.max(300, room.energyCapacityAvailable))
+
+  let max = 1
+  let body: BodyPartConstant[] = utils.createBody([CARRY, MOVE], room_energy)
+
+  const room_creeps = Object.values(Game.creeps).filter(({ my, ticksToLive, room: { name } }) => my && name === room.name && (!ticksToLive || ticksToLive > 100))
+
+  const harvester_counts = room_creeps.filter(({ store, memory: { role } }) => role === ROLE.harvester && store.getUsedCapacity(RESOURCE_ENERGY) > 10).length
+  if (harvester_counts === 0) return { max: 0, body: [] }
+
+  const upgraders_empty = room_creeps.some(({ store, memory: { role } }) => role === ROLE.upgrader && store.getUsedCapacity(RESOURCE_ENERGY) < 5)
+  if (upgraders_empty) max++
+
+  const harvesters_with_energy = room_creeps.some(({ store, memory: { role } }) => role === ROLE.harvester && store.getUsedCapacity(RESOURCE_ENERGY) === store.getCapacity(RESOURCE_ENERGY))
+  if (harvesters_with_energy) max++
+
+  return {
+    max,
+    body
   }
 }

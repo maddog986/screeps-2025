@@ -1,3 +1,4 @@
+import utils from 'utils/utils'
 import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
 
 export default class Harvester extends CreepBaseClass {
@@ -94,5 +95,48 @@ export default class Harvester extends CreepBaseClass {
                 this.transfer_code = this.creep.pickup(dropped_energy)
             }
         }
+    }
+}
+
+// HOC to cache a line for one game tick
+
+export const HarvesterSetup = (room: Room) => {
+    let room_energy = Math.min(700, room.energyCapacityAvailable)
+
+    let sources = room.find(FIND_SOURCES_ACTIVE)
+
+    const room_creeps = Object.values(Game.creeps).filter(({ my, ticksToLive, room: { name } }) => my && name === room.name && (!ticksToLive || ticksToLive > 100))
+
+    const full_harvesters = room_creeps.filter(({ store, memory: { role } }) => role === ROLE.harvester && !store.getFreeCapacity()).length
+    if (full_harvesters) return { max: 0, body: [] }
+
+    const mule_counts = room_creeps
+        .filter(({ memory: { role } }) => role === ROLE.mule)
+        .length
+
+    let source_walkable_positions = sources
+        .reduce((acc, s) => {
+            return acc + utils.walkablePositions(s.pos, 1)
+        }, 0)
+
+    let body: BodyPartConstant[] = [WORK, CARRY, MOVE]
+
+    if (room.controller && room.controller.level >= 2) {
+        let ticks_until_empty = 0
+
+        while (ticks_until_empty <= 220) {
+            source_walkable_positions -= 0.50
+            body = utils.createBody(mule_counts > 0 ? [WORK, CARRY, CARRY] : [WORK, CARRY, MOVE], room_energy)
+
+            const work_parts_total = body.filter((part) => part === WORK).length
+            const energy_per_tick = work_parts_total * HARVEST_POWER * Math.ceil(source_walkable_positions)
+
+            ticks_until_empty = sources.length * SOURCE_ENERGY_CAPACITY / energy_per_tick
+        }
+    }
+
+    return {
+        max: Math.ceil(source_walkable_positions),
+        body
     }
 }

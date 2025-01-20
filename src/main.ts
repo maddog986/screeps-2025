@@ -1,11 +1,11 @@
-import { cache } from 'utils/cache'
+import { buildLayout } from 'utils/builder'
 import Builder from 'utils/creeps/Builder'
 import { JOB, ROLE } from 'utils/creeps/CreepBaseClass'
 import Harvester from 'utils/creeps/Harvester'
 import Mule from 'utils/creeps/Mule'
 import Upgrader from 'utils/creeps/Upgrader'
-import { TravelData } from 'utils/Traveler'
-import { createBody, partsCost, walkablePositions } from 'utils/utils'
+import RoomManager from 'utils/room_manager'
+import { TravelerMemory } from 'utils/Traveler'
 
 declare global {
   // Memory extension samples
@@ -14,8 +14,12 @@ declare global {
     log: any
     cache: {
       [key: string]: {
-        expires: number
+        key: string
         value: any
+        ids?: string[]
+        serialized: boolean
+        expires: number
+        computedAt: number
       }
     }
   }
@@ -36,10 +40,10 @@ declare global {
     last_target?: Id<_HasId>
 
     work?: ScreepsReturnCode | CreepActionReturnCode | -100
-    move?: CreepMoveReturnCode | ERR_NO_PATH | ERR_INVALID_TARGET | ERR_NOT_FOUND | -100
+    move?: ScreepsReturnCode | -100
     transfer?: ScreepsReturnCode | -100
 
-    _trav?: TravelData
+    _travel?: TravelerMemory
   }
 
   // Syntax for adding proprties to `global` (ex "global.log")
@@ -48,13 +52,14 @@ declare global {
       log: any
     }
   }
-}
 
-type CreateSetup = {
-  [key in ROLE]: {
-    body: BodyPartConstant[],
-    max: number
+  type CreateSetup = {
+    [key in ROLE]: {
+      body: BodyPartConstant[],
+      max: number
+    }
   }
+
 }
 
 export const loop = () => {
@@ -64,6 +69,14 @@ export const loop = () => {
   for (const name in Memory.creeps) {
     if (!(name in Game.creeps)) {
       delete Memory.creeps[name]
+    }
+  }
+
+  if (Memory.cache) {
+    for (const key in Memory.cache) {
+      if (Memory.cache[key].expires < Game.time) {
+        delete Memory.cache[key]
+      }
     }
   }
 
@@ -100,159 +113,15 @@ export const loop = () => {
   for (const room_name in Game.rooms) {
     const room = Game.rooms[room_name]
 
+    // run every 30 ticks
+    if (Game.time % 50 === 0) {
+      buildLayout(room)
+    }
+
     // is room mine?
     if (room.controller?.my) {
-      // controller level
-      const controller_level = room.controller.level
-
-      const creepSetup: CreateSetup = cache.getItem('creepSetup', 5, () => {
-
-
-
-        let room_energy = Math.min(700, room.energyCapacityAvailable)
-        let sources = room.find(FIND_SOURCES)
-        let source_walkable_positions = sources
-          .reduce((acc, s) => {
-            return acc + walkablePositions(s)
-          }, 0)
-
-        let harvester_body: BodyPartConstant[] = []
-        let ticks_until_empty = 0
-
-        while (ticks_until_empty <= 250) {
-          source_walkable_positions -= 0.50
-          harvester_body = createBody([WORK, CARRY, CARRY], room_energy)
-
-          const work_parts_total = harvester_body.filter((part) => part === WORK).length
-          const energy_per_tick = work_parts_total * HARVEST_POWER * Math.ceil(source_walkable_positions)
-
-          ticks_until_empty = sources.length * SOURCE_ENERGY_CAPACITY / energy_per_tick
-        }
-
-
-
-
-        const spawns_positions = room.find(FIND_MY_SPAWNS).reduce((acc, spawn) => {
-          return acc + walkablePositions(spawn)
-        }, 0)
-
-        const creepSetup: CreateSetup = {
-          [ROLE.harvester]: {
-            body: [CARRY, CARRY, WORK, MOVE],
-            max: 3,
-          },
-          [ROLE.builder]: {
-            body: [WORK, CARRY, CARRY, MOVE, MOVE],
-            max: controller_level >= 2 ? 1 : 0,
-          },
-          [ROLE.mule]: {
-            body: [CARRY, CARRY, MOVE, MOVE],
-            max: 1,
-          },
-          [ROLE.upgrader]: {
-            body: [CARRY, WORK, WORK, MOVE],
-            max: controller_level
-          }
-        }
-
-        const mules = Object.values(Game.creeps)
-          .filter(({ ticksToLive, room, memory: { role } }) =>
-            // must be a mule
-            role === ROLE.mule &&
-            // must be in same
-            room.name === room_name &&
-            // must have a long life ahead
-            (ticksToLive === undefined || ticksToLive > 150)
-          ).length > 0
-
-        if (controller_level >= 2) {
-          if (mules) {
-            creepSetup[ROLE.harvester].body = harvester_body
-            creepSetup[ROLE.harvester].max = Math.floor(source_walkable_positions)
-
-            creepSetup[ROLE.upgrader].body = createBody([CARRY, CARRY, WORK, WORK], room_energy)
-            creepSetup[ROLE.upgrader].max = controller_level
-          }
-
-          //creepSetup[ROLE.mule].body = createBody([CARRY, CARRY, MOVE, MOVE], room_energy)
-          // creepSetup[ROLE.mule].max = Math.ceil(Object.values(Game.creeps).filter(({ room, memory: { role } }) => room.name === room_name && [ROLE.harvester, ROLE.upgrader, ROLE.builder].includes(role as any)).length * 0.3)
-        }
-
-        // console.log('harvester body:', creepSetup[ROLE.harvester].body)
-
-        return creepSetup
-      })
-
-      // find my spawns
-      const spawns = room.find(FIND_MY_SPAWNS)
-
-      // loop my spawns
-      for (const spawn of spawns) {
-        // if not my spawn, skip
-        if (spawn.room.name !== room_name) {
-          continue
-        }
-
-        // is spawn busy?
-        if (spawn.spawning) {
-          continue
-        }
-
-        // do we have energy to spawn anything?
-        if (spawn.room.energyAvailable < 100) {
-          continue
-        }
-
-        // loop my roles to find a creep to spawn
-        for (const _role in ROLE) {
-          const role = ROLE[_role as ROLE]
-
-          if (!creepSetup[role]) {
-            console.log(`No setup for role: ${role}`)
-            continue
-          }
-
-          const creeps = Object.values(Game.creeps).filter((creep: Creep) => creep.memory.role === role)
-
-          // do we have enough creeps of this role?
-          if (creeps.length >= creepSetup[role].max) {
-            continue
-          }
-
-          if (partsCost(creepSetup[role].body) > spawn.room.energyAvailable) {
-            continue
-          }
-
-          // figure a new name
-          const newName = (() => {
-            let name = role.slice(0, 1).toUpperCase()
-            let i = 1
-
-            while (!!Game.creeps[`${name}${i}`]) {
-              i++
-            }
-
-            return `${name}${i}`
-          })()
-
-          //`${role.slice(0, 1).toUpperCase()}_${Game.time}`
-
-          // spawn the creep
-          const spawned = spawn.spawnCreep(creepSetup[role].body, newName, {
-            memory: {
-              role,
-              room: room_name
-            },
-          })
-
-          if (spawned === OK) {
-            console.log(`Spawned new ${role}: ${newName}`)
-            break
-          } else {
-            console.log(`Failed to spawn new ${role}: ${newName}. Code: ${spawned}`)
-          }
-        }
-      }
+      const roomManager = new RoomManager(room)
+      roomManager.run()
     }
 
     // find all dropped resources
@@ -263,10 +132,10 @@ export const loop = () => {
 
     // find all creeps
     const creeps = Object.values(Game.creeps)
-      .filter(({ my, room: _room, memory: { transfer } }) => my && _room.name === room.name && transfer !== OK)
+      .filter(({ my, room: _room, memory: { transfer } }) => my && _room.name === room.name)
 
     // loop dropped resources
-    for (const dropped_resource of [...dropped_resources, ...tombstones]) {
+    for (const dropped_resource of [...tombstones, ...dropped_resources]) {
       // if resource is gone, break
       if (dropped_resource instanceof Resource && dropped_resource.amount === 0) {
         continue
@@ -281,27 +150,25 @@ export const loop = () => {
           continue
         }
 
-        if (creep.memory.transfer === OK) {
-          continue
-        }
-
         // if creep is full, skip
-        if (creep.store.getFreeCapacity() === 0) {
+        if (creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
           continue
         }
 
         // if creep is too far away, skip
-        if (!creep.pos.inRangeTo(dropped_resource, 1)) {
+        if (!creep.pos.isNearTo(dropped_resource)) {
           continue
         }
 
         // pickup dropped resource
         if (dropped_resource instanceof Resource) {
-          creep.memory.transfer = creep.pickup(dropped_resource)
+          creep.pickup(dropped_resource)
         } else if (dropped_resource instanceof Tombstone) {
-          creep.memory.transfer = creep.withdraw(dropped_resource, RESOURCE_ENERGY)
+          creep.withdraw(dropped_resource, RESOURCE_ENERGY)
         }
       }
     }
   }
 }
+
+// Game.spawns.Spawn1.spawnCreep([WORK, WORK, WORK, CARRY], "U3", { memory: { role: "upgrader", room: "W27528" } })
