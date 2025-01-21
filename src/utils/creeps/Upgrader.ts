@@ -2,6 +2,32 @@ import utils from 'utils/utils'
 import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
 
 export default class Upgrader extends CreepBaseClass {
+  static loadout(room: Room) {
+    let room_energy = Math.min(600, Math.max(300, room.energyCapacityAvailable))
+
+    let max = 1
+    let body: BodyPartConstant[] = utils.createBody([CARRY, CARRY, WORK, WORK], room_energy)
+
+    const room_creeps = utils.creeps({ room: room.name, ticksToLive: 100 })
+    const mule_counts = room_creeps.filter(({ memory: { role } }) => role === ROLE.mule).length
+    const harvester_counts = room_creeps.filter(({ store, memory: { role } }) => role === ROLE.harvester && store.getUsedCapacity(RESOURCE_ENERGY) > 10).length
+
+    const empty_upgrader_found = room_creeps.some(({ store, memory: { role } }) => role === ROLE.upgrader && store.getUsedCapacity(RESOURCE_ENERGY) === 0)
+    if (empty_upgrader_found || mule_counts === 0 || harvester_counts === 0) return { max: 0, body: [] }
+
+    const full_harvesters = room_creeps.some(({ store, memory: { role } }) => role === ROLE.harvester && store.getUsedCapacity(RESOURCE_ENERGY) === store.getCapacity(RESOURCE_ENERGY))
+    if (full_harvesters) max++
+
+    const total_alive_upgraders = room_creeps.filter(({ memory: { role } }) => role === ROLE.upgrader).length
+    const idle_mules = room_creeps.filter(({ store, memory: { role, job } }) => role === ROLE.mule && job === JOB.idle && store.getUsedCapacity(RESOURCE_ENERGY) >= 50)
+    if (idle_mules.length > 0) max += idle_mules.length
+
+    return {
+      max,
+      body
+    }
+  }
+
   findTarget() {
     this.findJob([ASSIGNMENT.upgrade_controller])
 
@@ -63,8 +89,7 @@ export const UpgraderSetup = (room: Room) => {
   let max = 1
   let body: BodyPartConstant[] = utils.createBody([CARRY, CARRY, WORK, WORK], room_energy)
 
-  const room_creeps = Object.values(Game.creeps).filter(({ my, ticksToLive, room: { name } }) => my && name === room.name && (!ticksToLive || ticksToLive > 100))
-
+  const room_creeps = utils.creeps({ room: room.name, ticksToLive: 100 })
   const mule_counts = room_creeps.filter(({ memory: { role } }) => role === ROLE.mule).length
   const harvester_counts = room_creeps.filter(({ store, memory: { role } }) => role === ROLE.harvester && store.getUsedCapacity(RESOURCE_ENERGY) > 10).length
 

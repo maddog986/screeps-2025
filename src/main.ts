@@ -1,4 +1,3 @@
-import { buildLayout } from 'utils/builder'
 import Builder from 'utils/creeps/Builder'
 import { JOB, ROLE } from 'utils/creeps/CreepBaseClass'
 import Harvester from 'utils/creeps/Harvester'
@@ -6,6 +5,7 @@ import Mule from 'utils/creeps/Mule'
 import Upgrader from 'utils/creeps/Upgrader'
 import RoomManager from 'utils/room_manager'
 import { TravelerMemory } from 'utils/Traveler'
+import utils from 'utils/utils'
 
 declare global {
   // Memory extension samples
@@ -20,12 +20,14 @@ declare global {
         serialized: boolean
         expires: number
         computedAt: number
+        cpuUsed: number
       }
     }
   }
 
   interface RoomMemory {
     avoid?: boolean
+    spawn_next?: number
   }
 
   interface CreepMemory {
@@ -42,8 +44,10 @@ declare global {
     work?: ScreepsReturnCode | CreepActionReturnCode | -100
     move?: ScreepsReturnCode | -100
     transfer?: ScreepsReturnCode | -100
+    pickup?: ScreepsReturnCode | -100
 
     _travel?: TravelerMemory
+    _move?: any
   }
 
   // Syntax for adding proprties to `global` (ex "global.log")
@@ -59,8 +63,9 @@ declare global {
       max: number
     }
   }
-
 }
+
+console.log(`---Global reset ${Game.time}`)
 
 export const loop = () => {
   // console.log(`Current game tick is ${Game.time}`)
@@ -113,11 +118,6 @@ export const loop = () => {
   for (const room_name in Game.rooms) {
     const room = Game.rooms[room_name]
 
-    // run every 30 ticks
-    if (Game.time % 50 === 0) {
-      buildLayout(room)
-    }
-
     // is room mine?
     if (room.controller?.my) {
       const roomManager = new RoomManager(room)
@@ -131,8 +131,7 @@ export const loop = () => {
     })
 
     // find all creeps
-    const creeps = Object.values(Game.creeps)
-      .filter(({ my, room: _room, memory: { transfer } }) => my && _room.name === room.name)
+    const creeps = utils.creeps({ room: room.name })
 
     // loop dropped resources
     for (const dropped_resource of [...tombstones, ...dropped_resources]) {

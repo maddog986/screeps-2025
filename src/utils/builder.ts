@@ -1,4 +1,6 @@
 import { CONFIG } from 'config'
+import { ROLE } from './creeps/CreepBaseClass'
+import Traveler from './Traveler'
 import utils from './utils'
 
 interface LayoutKey {
@@ -384,20 +386,21 @@ export const getBuildPositions = function (layout: string[]): SimplePositions {
     return positions
 }
 
-const VISUALIZE = true
 
 export const buildLayout = function (room: Room) {
-    const constructure_sites = room.find(FIND_MY_CONSTRUCTION_SITES)
-    if (constructure_sites.length) return
-
     const buildOrder = CONFIG.buildOrder[room.name]
     if (!buildOrder) return
 
     const center_point = room.find(FIND_MY_SPAWNS).pop()
     if (!center_point) return
 
-    const controller_level = room.controller?.level || 0
+    if (!room.controller) return
+
+    let controller_level = room.controller?.level || 0
     if (!controller_level) return
+
+    controller_level = controller_level + (room.controller.progress / room.controller?.progressTotal)
+    if (Game.time % 10 === 0) console.log("controller_level:", controller_level)
 
     let all_structures: Array<{ x: number, y: number, structure: string, level: number }> = []
 
@@ -410,7 +413,34 @@ export const buildLayout = function (room: Room) {
 
         for (const structure in positions) {
             for (const [x, y] of positions[structure]) {
-                all_structures.push({ x: center_point.pos.x + x, y: center_point.pos.y + y, structure, level: parseInt(level) })
+                all_structures.push({ x: center_point.pos.x + x, y: center_point.pos.y + y, structure, level: Number(level) })
+            }
+        }
+    }
+
+
+    // dynamic structures
+    const constructure_sites = room.find(FIND_MY_CONSTRUCTION_SITES)
+    const containers = room.find(FIND_STRUCTURES, {
+        filter: ({ structureType }) => structureType === STRUCTURE_CONTAINER
+    })
+
+    // find a source with all positions with at least one full harvester
+    const full_harvesters_near_sources = room.find(FIND_SOURCES, {
+        filter: (source) =>
+            // find all harvester creeps with target source and no capacity
+            utils.creeps({ role: ROLE.harvester, target: source.id, freeCapacity: 0 }).length >= 1
+            // no containers near source
+            && !containers.some(({ pos }) => source.pos.inRangeTo(pos, 2))
+            // no construction sites near source
+            && !constructure_sites.some(({ pos }) => source.pos.inRangeTo(pos, 2))
+    })
+
+    if (full_harvesters_near_sources.length) {
+        for (const full_harvesters_near_source of full_harvesters_near_sources) {
+            const optimalPosition = utils.findOptimalPosition(room, full_harvesters_near_source.pos, 1)
+            if (optimalPosition) {
+                all_structures.push({ x: optimalPosition.x, y: optimalPosition.y, structure: STRUCTURE_CONTAINER, level: 3 })
             }
         }
     }
@@ -418,22 +448,39 @@ export const buildLayout = function (room: Room) {
     const spawns = room.find(FIND_MY_SPAWNS)
     const sources = room.find(FIND_SOURCES)
 
+    // build roads to sources
     for (const spawn of spawns) {
         for (const source of sources) {
+            // look for containers near source
+            const container_near_source = room.find(FIND_STRUCTURES, {
+                filter: ({ pos, structureType }) => structureType === STRUCTURE_CONTAINER && source.pos.inRangeTo(pos, 2)
+            }).shift()
+
             // find a path to the source
-            const path_to_source = spawn.pos.findPathTo(source.pos, {
-                range: 2,
+            const path_to_source = spawn.pos.findPathTo(container_near_source ? container_near_source.pos : source.pos, {
+                range: container_near_source ? 1 : 2,
                 ignoreCreeps: true,
                 maxOps: 5000,
-                costCallback: function (roomName, costMatrix) {
+                maxRooms: 1,
+                costCallback: (roomName, costMatrix) => {
+                    costMatrix = Traveler.buildRoomCostMatrix(roomName, costMatrix, {
+                        swampCost: 1,
+                        plainCost: 10,
+                        ignoreCreeps: true
+                    })
+
                     for (const { x, y, structure } of all_structures) {
-                        if (structure === STRUCTURE_ROAD) {
-                            costMatrix.set(x, y, 0)
+                        if (structure === STRUCTURE_WALL) {
+                            costMatrix.set(x, y, 255)
+                        } else if (structure === STRUCTURE_ROAD) {
+                            costMatrix.set(x, y, 1)
                         } else {
                             costMatrix.set(x, y, 255)
                         }
                     }
-                }
+
+                    return costMatrix
+                },
             })
 
             for (const { x, y } of path_to_source) {
@@ -442,6 +489,9 @@ export const buildLayout = function (room: Room) {
         }
     }
 
+
+
+    // clean up structures data
     all_structures = all_structures
         // remove duplicates from all_structures if there is a lower level
         .filter((v, i, a) => a.findIndex(t => (t.x === v.x && t.y === v.y && t.structure === v.structure) && t.level < v.level) === -1)
@@ -451,7 +501,10 @@ export const buildLayout = function (room: Room) {
             return structures.length === 0
         })
 
-    if (!constructure_sites.length) {
+
+
+    // do construction sites
+    if (CONFIG.buildEnabled && constructure_sites.length <= 3) {
         const structure_closest_to_spawn = all_structures
             // filter out levels higher than controller
             .filter(({ level }) => level <= controller_level)
@@ -473,17 +526,20 @@ export const buildLayout = function (room: Room) {
                 return 0
             })
             // get first item
-            .shift()
+            .slice(0, Math.max(1, 3 - constructure_sites.length))
 
-        if (structure_closest_to_spawn) {
-            room.createConstructionSite(structure_closest_to_spawn.x, structure_closest_to_spawn.y, structure_closest_to_spawn.structure as BuildableStructureConstant)
+        if (structure_closest_to_spawn.length) {
+            structure_closest_to_spawn.forEach(({ x, y, structure }) => {
+                console.log(`construct: ${structure}`, room.createConstructionSite(x, y, structure as BuildableStructureConstant))
+            })
         }
     }
 
-    if (!VISUALIZE) return
+    // all visualizations
+    if (!CONFIG.visualizeRoom) return
 
     for (const { x, y, structure, level } of all_structures) {
-        if (level > controller_level) continue
+        // if (level > controller_level) continue
 
         visual_structure({
             room,
@@ -494,18 +550,21 @@ export const buildLayout = function (room: Room) {
         })
     }
 
-    const dirs = [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [-1, 0], [0, 1], [1, 0]]
-
-    const roads = all_structures.filter(({ structure }) => structure === STRUCTURE_ROAD)
+    const roads = [...all_structures.filter(({ structure }) => structure === STRUCTURE_ROAD),
+    ...room.find(FIND_STRUCTURES, { filter: ({ structureType }) => structureType === STRUCTURE_ROAD }).map(({ pos }) => ({ x: pos.x, y: pos.y, level: 3, structure: STRUCTURE_ROAD })),
+    ...constructure_sites.filter(({ structureType }) => structureType === STRUCTURE_ROAD).map(({ pos }) => ({ x: pos.x, y: pos.y, level: 3, structure: STRUCTURE_ROAD }))
+    ]
+        // remove duplicates from all_structures if there is a lower level
+        .filter((v, i, a) => a.findIndex(t => (t.x === v.x && t.y === v.y && t.structure === v.structure) && t.level < v.level) === -1)
 
     for (const { x, y, level } of roads) {
-        if (level > controller_level) continue
+        for (let dx = x - 1; dx <= x + 1; dx++) {
+            for (let dy = y - 1; dy <= y + 1; dy++) {
+                if (dx === x && dy === y) continue
 
-        for (let i = 0; i < dirs.length; i++) {
-            let coord = [x + dirs[i][0], y + dirs[i][1]]
-
-            if (roads.some(({ x, y }) => x === coord[0] && y === coord[1])) {
-                room.visual.line(x, y, coord[0], coord[1], { color: "#666", opacity: 0.25, width: 0.45 })
+                if (roads.some(({ x, y }) => x === dx && y === dy)) {
+                    room.visual.line(dx, dy, x, y, { color: "#666", opacity: 0.25, width: 0.45 })
+                }
             }
         }
     }

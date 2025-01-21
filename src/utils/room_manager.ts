@@ -1,10 +1,12 @@
+import { CONFIG } from 'config'
 import { buildLayout } from './builder'
 import { cache } from './cache'
-import { BuilderSetup } from './creeps/Builder'
+import Builder from './creeps/Builder'
 import { ROLE } from './creeps/CreepBaseClass'
-import { HarvesterSetup } from './creeps/Harvester'
-import { MuleSetup } from './creeps/Mule'
-import { UpgraderSetup } from './creeps/Upgrader'
+import Harvester from './creeps/Harvester'
+import Mule from './creeps/Mule'
+import Upgrader from './creeps/Upgrader'
+import Traveler from './Traveler'
 import utils from './utils'
 
 export default class RoomManager {
@@ -19,17 +21,17 @@ export default class RoomManager {
         return this.room.name
     }
 
-    @cache("build_room", 4)
+    @cache("creep_loadout", 4)
     creep_loadout(): CreateSetup {
         return {
-            [ROLE.harvester]: HarvesterSetup(this.room),
-            [ROLE.builder]: BuilderSetup(this.room),
-            [ROLE.mule]: MuleSetup(this.room),
-            [ROLE.upgrader]: UpgraderSetup(this.room)
+            [ROLE.harvester]: Harvester.loadout(this.room),
+            [ROLE.builder]: Builder.loadout(this.room),
+            [ROLE.mule]: Mule.loadout(this.room),
+            [ROLE.upgrader]: Upgrader.loadout(this.room)
         }
     }
 
-    @cache("build_room", 10)
+    // @cache("build_room", CONFIG.buildModifer)
     build_room() {
         buildLayout(this.room)
     }
@@ -41,7 +43,7 @@ export default class RoomManager {
 
     @cache('find_creep_by_role')
     find_creep_by_role(role: ROLE) {
-        return Object.values(Game.creeps).filter((creep: Creep) => creep.memory.role === role)
+        return utils.creeps({ role })
     }
 
     @cache('find_structure_by_type', 5)
@@ -62,9 +64,24 @@ export default class RoomManager {
     }
 
     run() {
+        // auto build room layout
+        this.build_room()
 
-        if (Game.time % 25 === 0) {
-            this.build_room()
+        if (CONFIG.visualizeMatrix) {
+            // lets visualize the room matrix
+            const matrix = new PathFinder.CostMatrix
+            const room_matrix = Traveler.buildRoomCostMatrix(this.room.name, matrix)
+
+            // loop through the matrix, display a number on each tile with its cost
+            for (let y = 0; y < 50; y++) {
+                for (let x = 0; x < 50; x++) {
+                    const cost = room_matrix.get(x, y)
+                    this.room.visual.text(cost.toString(), x, y, {
+                        font: '0.4 Arial',
+                        opacity: 0.35
+                    })
+                }
+            }
         }
 
         const towers = this.find_structure_by_type(STRUCTURE_TOWER) as StructureTower[]
@@ -85,6 +102,9 @@ export default class RoomManager {
                 }
             }
         }
+
+        // limit spawn rates
+        if (this.room.memory.spawn_next && this.room.memory.spawn_next > Game.time) return
 
         // find my spawns
         const spawns = this.find_spawns()
@@ -156,6 +176,7 @@ export default class RoomManager {
                 })
 
                 if (spawned === OK) {
+                    this.room.memory.spawn_next = Game.time + CONFIG.spawnRate
                     console.log(`Spawned new ${role}: ${newName}`)
                     break
                 } else {

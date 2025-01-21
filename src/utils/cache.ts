@@ -1,5 +1,7 @@
 const CacheStorage: Record<string, { value: any; serialized: boolean; expires: number }> = {}
 
+Memory.cache = {}
+
 export function cache(name: string, ttl: number = 1, debug: boolean = false) {
     return function (
         target: any,
@@ -21,6 +23,15 @@ export function cache(name: string, ttl: number = 1, debug: boolean = false) {
                 if (arg instanceof RoomPosition) {
                     return `${arg.x},${arg.y},${arg.roomName}`
                 }
+                if (arg instanceof PathFinder.CostMatrix) {
+                    return `costmatrix`
+                }
+                if (arg instanceof Room) {
+                    return arg.name
+                }
+                if (arg instanceof RoomObject) {
+                    return `${arg.pos.x},${arg.pos.y},${arg.pos.roomName}`
+                }
                 return JSON.stringify(arg)
             })
             const cacheKey = `${name}:${contextKey}:${serializedArgs.join(":")}`
@@ -38,9 +49,16 @@ export function cache(name: string, ttl: number = 1, debug: boolean = false) {
                 return cached.value
             }
 
+            // Measure CPU before executing the method
+            const startCpu = Game.cpu.getUsed()
+
             // Compute the result and determine if it needs serialization
             const result = originalMethod.apply(this, args)
             const serialize_data = Array.isArray(result) && result.every(obj => obj?.id)
+
+            // Measure CPU after execution
+            const endCpu = Game.cpu.getUsed()
+            const cpuUsed = endCpu - startCpu
 
             // If the result is an array of game objects, cache their IDs
             const serializedResult = serialize_data
@@ -63,6 +81,7 @@ export function cache(name: string, ttl: number = 1, debug: boolean = false) {
                 serialized: serialize_data,
                 expires: Game.time + ttl - 1,
                 computedAt: Game.time,
+                cpuUsed, // Store the CPU usage for this computation
             }
 
             if (debug) {

@@ -2,6 +2,45 @@ import utils from 'utils/utils'
 import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
 
 export default class Harvester extends CreepBaseClass {
+    static loadout(room: Room) {
+        let room_energy = Math.min(700, room.energyCapacityAvailable)
+        let sources = room.find(FIND_SOURCES_ACTIVE)
+
+        const room_creeps = utils.creeps({ room: room.name, ticksToLive: 100 })
+        const full_harvesters = room_creeps.filter(({ store, memory: { role } }) => role === ROLE.harvester && !store.getFreeCapacity()).length
+        if (full_harvesters) return { max: 0, body: [] }
+
+        const mule_counts = room_creeps
+            .filter(({ memory: { role } }) => role === ROLE.mule)
+            .length
+
+        let source_walkable_positions = sources
+            .reduce((acc, s) => {
+                return acc + utils.walkablePositions(s.pos, 1)
+            }, 0)
+
+        let body: BodyPartConstant[] = [WORK, CARRY, MOVE]
+
+        if (room.controller && room.controller.level >= 2) {
+            let ticks_until_empty = 0
+
+            while (ticks_until_empty <= 220) {
+                source_walkable_positions -= 0.50
+                body = utils.createBody(mule_counts > 0 ? [WORK, CARRY, CARRY] : [WORK, CARRY, MOVE], room_energy)
+
+                const work_parts_total = body.filter((part) => part === WORK).length
+                const energy_per_tick = work_parts_total * HARVEST_POWER * Math.ceil(source_walkable_positions)
+
+                ticks_until_empty = sources.length * SOURCE_ENERGY_CAPACITY / energy_per_tick
+            }
+        }
+
+        return {
+            max: Math.ceil(source_walkable_positions),
+            body
+        }
+    }
+
     findTarget() {
         const has_move_part = this.creep.body.some(({ type }) => type === MOVE)
 
@@ -13,7 +52,7 @@ export default class Harvester extends CreepBaseClass {
         // can the creep do something with stored energy?
         if (has_move_part && this.hasUsedCapacity()) {
             // count mules spawned
-            const mules = Object.values(Game.creeps).filter(({ memory: { role } }) => role === ROLE.mule).length
+            const mules = utils.creeps({ role: ROLE.mule }).length
 
             if (mules === 0) {
                 this.findJob([ASSIGNMENT.refill_spawn])
@@ -48,6 +87,26 @@ export default class Harvester extends CreepBaseClass {
         // if already transfered, return
         if (this.transfer_code === OK) {
             return
+        }
+
+        // if hasent worked, find a nearby construction site
+        if (this.creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0 && this.work_code !== OK) {
+            const construction_site = this.creep.pos.findInRange(FIND_MY_CONSTRUCTION_SITES, 4).shift()
+
+            if (construction_site) {
+                this.work_code = this.creep.build(construction_site)
+            }
+
+            if (this.work_code !== OK) {
+                // find something to repair
+                const repair = this.creep.pos.findInRange(FIND_STRUCTURES, 3, {
+                    filter: (s) => s.hits < s.hitsMax
+                }).shift()
+
+                if (repair) {
+                    this.work_code = this.creep.repair(repair)
+                }
+            }
         }
 
         // find a mule creep nearby to transfer to
@@ -87,56 +146,22 @@ export default class Harvester extends CreepBaseClass {
         }
 
         // pickup dropped energy if not full
-        if (this.creep.store.getFreeCapacity() > 0) {
+        if (this.creep.store.getFreeCapacity() > 0 && this.pickup_code !== OK) {
             const dropped_energy = this.creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
                 filter: ({ resourceType }) => resourceType === RESOURCE_ENERGY
             })
             if (dropped_energy) {
-                this.transfer_code = this.creep.pickup(dropped_energy)
+                this.pickup_code = this.creep.pickup(dropped_energy)
             }
         }
-    }
-}
 
-// HOC to cache a line for one game tick
+        // find a nearby container to transfer to
+        const container = this.creep.pos.findClosestByPath(FIND_STRUCTURES, {
+            filter: (c) => c.structureType === STRUCTURE_CONTAINER && c.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+        })
 
-export const HarvesterSetup = (room: Room) => {
-    let room_energy = Math.min(700, room.energyCapacityAvailable)
-
-    let sources = room.find(FIND_SOURCES_ACTIVE)
-
-    const room_creeps = Object.values(Game.creeps).filter(({ my, ticksToLive, room: { name } }) => my && name === room.name && (!ticksToLive || ticksToLive > 100))
-
-    const full_harvesters = room_creeps.filter(({ store, memory: { role } }) => role === ROLE.harvester && !store.getFreeCapacity()).length
-    if (full_harvesters) return { max: 0, body: [] }
-
-    const mule_counts = room_creeps
-        .filter(({ memory: { role } }) => role === ROLE.mule)
-        .length
-
-    let source_walkable_positions = sources
-        .reduce((acc, s) => {
-            return acc + utils.walkablePositions(s.pos, 1)
-        }, 0)
-
-    let body: BodyPartConstant[] = [WORK, CARRY, MOVE]
-
-    if (room.controller && room.controller.level >= 2) {
-        let ticks_until_empty = 0
-
-        while (ticks_until_empty <= 220) {
-            source_walkable_positions -= 0.50
-            body = utils.createBody(mule_counts > 0 ? [WORK, CARRY, CARRY] : [WORK, CARRY, MOVE], room_energy)
-
-            const work_parts_total = body.filter((part) => part === WORK).length
-            const energy_per_tick = work_parts_total * HARVEST_POWER * Math.ceil(source_walkable_positions)
-
-            ticks_until_empty = sources.length * SOURCE_ENERGY_CAPACITY / energy_per_tick
+        if (container) {
+            this.transfer_code = this.creep.transfer(container, RESOURCE_ENERGY)
         }
-    }
-
-    return {
-        max: Math.ceil(source_walkable_positions),
-        body
     }
 }
