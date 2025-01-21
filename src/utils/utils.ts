@@ -95,15 +95,24 @@ export default class utils {
         return this.getRangeTo(pos1, pos2) <= 1
     }
 
+    @cache("inRangeTo", 100)
+    static inRangeTo(pos1: RoomPosition, pos2: RoomPosition, range: number): boolean {
+        return this.getRangeTo(pos1, pos2) <= range
+    }
+
     @cache("findOptimalPosition", 100)
-    static findOptimalPosition(room: Room, position: RoomPosition, range: number = 1): RoomPosition | null {
+    static findOptimalPosition(room: Room, position: RoomPosition, range: number = 1): RoomPosition | undefined {
         const terrain = new Room.Terrain(room.name)
 
         // Get all positions within 1 range of the source
         const adjacentPositions: RoomPosition[] = []
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
-                if (dx === 0 && dy === 0) continue // Skip the source position itself
+                // skip out of bounds
+                if (position.x + dx < 0 || position.x + dx > 49 || position.y + dy < 0 || position.y + dy > 49) continue
+                // Skip the source position itself
+                if (dx === 0 && dy === 0) continue
+
                 const x = position.x + dx
                 const y = position.y + dy
 
@@ -114,14 +123,20 @@ export default class utils {
             }
         }
 
+        const spawn = room.find(FIND_MY_SPAWNS).shift()
+
         // Check positions for the best container placement
-        const optimalPosition = adjacentPositions.find((pos) =>
+        const optimalPosition = adjacentPositions.filter((pos) =>
             adjacentPositions.every(
                 (adjPos) => adjPos.getRangeTo(pos) <= range // Ensure the position is within 1 range of all adjacent tiles
             )
         )
+            // sort by more walkable positions
+            .sort((a, b) => this.walkablePositions(a) - this.walkablePositions(b))
+            // grab last one
+            .pop()
 
-        return optimalPosition || null // Return the optimal position or null if none found
+        return optimalPosition // Return the optimal position or null if none found
     };
 
     @cache("findPath")
@@ -132,7 +147,7 @@ export default class utils {
     }
 
     @cache("creeps")
-    static creeps({ id, id_not, role, job, room, target, freeCapacity: hasFreeCapacity, usedCapacity: hasUsedCapacity, ticksToLive, notAssigned, assignedId: assignedTarget, notOverAssigned }: {
+    static creeps({ id, id_not, role, job, room, target, freeCapacity, usedCapacity, ticksToLive, notAssigned, assignedId, notOverAssigned }: {
         id?: string | undefined
         id_not?: string | undefined
         role?: ROLE | ROLE[] | undefined
@@ -162,7 +177,7 @@ export default class utils {
             && (id_not === undefined || creep.id !== id_not)
 
             // matches the role we want
-            && (role === undefined || (Array.isArray(role) ? role?.includes(creep.memory.role) : role === creep.memory.role))
+            && (role === undefined || (Array.isArray(role) ? role.includes(creep.memory.role) : role === creep.memory.role))
 
             // matches the room we want
             && (room === undefined || creep.room.name === room)
@@ -171,19 +186,19 @@ export default class utils {
             && (target === undefined || creep.memory.target === target)
 
             // has free capacity
-            && (hasFreeCapacity === undefined || creep.store.getFreeCapacity() > hasFreeCapacity)
+            && (freeCapacity === undefined || creep.store.getFreeCapacity() > freeCapacity)
 
             // has stored capacity
-            && (hasUsedCapacity === undefined || creep.store.getUsedCapacity() > hasUsedCapacity)
+            && (usedCapacity === undefined || creep.store.getUsedCapacity() > usedCapacity)
 
             // ticks to live
             && (ticksToLive === undefined || (!creep.ticksToLive || creep.ticksToLive > ticksToLive))
 
             // not already assigned
-            && (notAssigned === undefined || creeps.filter(({ memory: { role, job, target } }) => job === creep.memory.job && target === assignedTarget).length === 0)
+            && (notAssigned === undefined || creeps.filter(({ memory: { role, job, target } }) => target === creep.id).length === 0)
 
             // not over assigned
-            && (notOverAssigned === undefined || creeps.filter(({ memory: { role, job, target } }) => job === creep.memory.job && target === assignedTarget).length < 2)
+            && (notOverAssigned === undefined || creeps.filter(({ memory: { role, job, target } }) => target === creep.id).length < 2)
         )
     }
 
@@ -210,5 +225,49 @@ export default class utils {
             origin.y + offset.y,
             origin.roomName
         )
+    }
+
+
+    // const neighbors = utils.getNeighbors(x, y, 1)
+    // neighbors.forEach(([dx, dy]) => {
+    //     if (roads.some(({ x: nx, y: ny }) => nx === dx && ny === dy)) {
+    //         room.visual.line(dx, dy, x, y, { color: "#666", opacity: 0.25, width: 0.45 })
+    //     }
+    // })
+
+    // • • •
+    // • x •
+    // • • •
+
+    static getNeighbors(x: number, y: number, distance: number = 1): [number, number][] {
+        const neighbors: [number, number][] = []
+        for (let dx = -distance; dx <= distance; dx++) {
+            for (let dy = -distance; dy <= distance; dy++) {
+                if (dx === 0 && dy === 0) continue // Skip the center point
+                neighbors.push([x + dx, y + dy])
+            }
+        }
+        return neighbors
+    }
+
+    //   •
+    // • x •
+    //   •
+    static getOrthogonalNeighbors(x: number, y: number, distance: number = 1): [number, number][] {
+        const neighbors: [number, number][] = []
+        for (let i = 1; i <= distance; i++) {
+            neighbors.push([x + i, y], [x - i, y], [x, y + i], [x, y - i])
+        }
+        return neighbors
+    }
+
+    static getGridNeighbors(x: number, y: number, distance: number = 1): [number, number][] {
+        const neighbors: [number, number][] = []
+        for (let dx = -distance; dx <= distance; dx++) {
+            for (let dy = -distance; dy <= distance; dy++) {
+                neighbors.push([x + dx, y + dy])
+            }
+        }
+        return neighbors
     }
 }

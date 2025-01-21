@@ -73,6 +73,24 @@ export const CREEP_ASSIGNMENTS = {
         const target = this.creep.room.find(FIND_MY_CONSTRUCTION_SITES)
             // order by least done
             .sort((a, b) => a.progress - b.progress)
+            // move containers to the bottom of the list
+            .sort((a, b) => {
+                if (a.structureType === STRUCTURE_EXTENSION) return 1
+                if (b.structureType === STRUCTURE_EXTENSION) return -1
+                return 0
+            })
+            // move extensions to the bottom of the list
+            .sort((a, b) => {
+                if (a.structureType === STRUCTURE_EXTENSION) return 1
+                if (b.structureType === STRUCTURE_EXTENSION) return -1
+                return 0
+            })
+            // move towers to the bottom of the list
+            .sort((a, b) => {
+                if (a.structureType === STRUCTURE_TOWER) return 1
+                if (b.structureType === STRUCTURE_TOWER) return -1
+                return 0
+            })
             // get last one
             .pop()
 
@@ -175,7 +193,7 @@ export const CREEP_ASSIGNMENTS = {
                 const energy_use_per_tick = body.filter(({ type }) => type === WORK).length * HARVEST_POWER
 
                 // how much energy does the creep use before we can reach it
-                const energy_use_given_distance = energy_use_per_tick * (rangeTo + 4)
+                const energy_use_given_distance = energy_use_per_tick * (rangeTo)
 
                 // only go to creep that will be close to empty before we get there
                 if (rangeTo > 3 && store.getUsedCapacity(RESOURCE_ENERGY) > energy_use_given_distance) return false
@@ -329,10 +347,24 @@ export class CreepBaseClass {
         this.creep.memory.transfer = -100
         this.creep.memory.work = -100
 
+        if (this.creep.memory.job === JOB.idle) {
+            this.clearTarget()
+        }
+
         if (this.creep.memory.target_time == undefined) this.creep.memory.target_time = -1
 
         if (this.target) {
             this.creep.memory.target_time += 1
+        }
+
+        if (!this.hasFreeCapacity()) {
+            // creep is full now, your all now free to go
+            utils.creeps({ job: JOB.transfer, target: this.creep.id })
+                .forEach((creep) => {
+                    // remove creeps target
+                    delete creep.memory.target
+                    delete creep.memory.job
+                })
         }
     }
 
@@ -622,12 +654,25 @@ export class CreepBaseClass {
             return
         }
 
+        this.transfer_code = this.creep.transfer(this.target as any, resource)
+
+
         // save a transfer request
-        if (this.target instanceof Creep && this.target.memory.transfer !== OK) {
+        if (this.target instanceof Creep) {
+            if (this.transfer_code === OK && this.target.store.getFreeCapacity() === 0) {
+                // creep is full now, your welcome other creeps, your now free to go
+                utils.creeps({ id_not: this.creep.id, job: JOB.transfer, target: this.target.id })
+                    .forEach((creep) => {
+                        // remove creeps target
+                        delete creep.memory.target
+                    })
+            }
+
+            // if (this.target.memory.transfer !== OK) {
             // return this.withdrawResource()
+            // }
         }
 
-        this.transfer_code = this.creep.transfer(this.target as any, resource)
 
         if ([OK, ERR_FULL, ERR_NOT_ENOUGH_RESOURCES].includes(this.transfer_code as any) || !this.hasUsedCapacity()) {
             this.clearTarget()

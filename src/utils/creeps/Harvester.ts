@@ -21,12 +21,28 @@ export default class Harvester extends CreepBaseClass {
 
         let body: BodyPartConstant[] = [WORK, CARRY, MOVE]
 
+        // is there a container near all the sources?
+        const containers_at_sources = sources
+            .map((source) => source.pos.findInRange(FIND_STRUCTURES, 1, {
+                filter: (s) => s.structureType === STRUCTURE_CONTAINER
+            }))
+            .filter((containers) => containers.length).length === sources.length
+
         if (room.controller && room.controller.level >= 2) {
             let ticks_until_empty = 0
 
             while (ticks_until_empty <= 220) {
                 source_walkable_positions -= 0.50
-                body = utils.createBody(mule_counts > 0 ? [WORK, CARRY, CARRY] : [WORK, CARRY, MOVE], room_energy)
+
+                if (containers_at_sources && mule_counts === 0) {
+                    body = utils.createBody([WORK, CARRY, MOVE], room_energy)
+                } else if (containers_at_sources && mule_counts > 0) {
+                    body = utils.createBody([WORK, WORK, CARRY], room_energy)
+                } else if (mule_counts === 0) {
+                    body = utils.createBody([WORK, CARRY, MOVE], room_energy)
+                } else {
+                    body = utils.createBody([WORK, CARRY, CARRY], room_energy)
+                }
 
                 const work_parts_total = body.filter((part) => part === WORK).length
                 const energy_per_tick = work_parts_total * HARVEST_POWER * Math.ceil(source_walkable_positions)

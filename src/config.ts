@@ -1,21 +1,47 @@
 interface Config {
-    visualizeRoom: boolean
     visualizeMatrix: boolean
     spawnRate: number
+    buildRotate: number
     buildEnabled: boolean
+    buildRoads: number
+    buildContainers: number
     buildModifer: number
     buildOrder: {
         [key: string]: {
             [key: number]: string[]
         }
     }
+    visuals: {
+        enabled: boolean
+        show_matrix: boolean
+        show_build: boolean
+        show_build_levels: boolean
+    }
+    build: {
+        enabled: boolean
+        max_constructions: number
+    }
 }
 
 export const CONFIG: Config = {
-    visualizeRoom: true,
+    visuals: {
+        enabled: true,
+        show_matrix: false,
+        show_build: true,
+        show_build_levels: false
+    },
     visualizeMatrix: false,
     spawnRate: 10,
+
+    build: {
+        enabled: true,
+        max_constructions: 5,
+    },
+
+    buildRotate: 0, // 254, 280, 287
     buildEnabled: true,
+    buildRoads: 3.8,
+    buildContainers: 3.2,
     buildModifer: 40, // how often to check for new builds
     buildOrder: {
         sim: {

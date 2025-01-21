@@ -1,11 +1,11 @@
 import { CONFIG } from 'config'
-import { buildLayout } from './builder'
 import { cache } from './cache'
 import Builder from './creeps/Builder'
 import { ROLE } from './creeps/CreepBaseClass'
 import Harvester from './creeps/Harvester'
 import Mule from './creeps/Mule'
 import Upgrader from './creeps/Upgrader'
+import RoomBuilder from './room_builder'
 import Traveler from './Traveler'
 import utils from './utils'
 
@@ -33,7 +33,11 @@ export default class RoomManager {
 
     // @cache("build_room", CONFIG.buildModifer)
     build_room() {
-        buildLayout(this.room)
+        if (CONFIG.build.enabled === false) return
+
+        //buildLayout(this.room)
+        const builder = new RoomBuilder(this.room)
+        builder.run()
     }
 
     @cache('spawns', 10)
@@ -67,7 +71,7 @@ export default class RoomManager {
         // auto build room layout
         this.build_room()
 
-        if (CONFIG.visualizeMatrix) {
+        if (CONFIG.visuals.enabled && CONFIG.visuals.show_matrix) {
             // lets visualize the room matrix
             const matrix = new PathFinder.CostMatrix
             const room_matrix = Traveler.buildRoomCostMatrix(this.room.name, matrix)

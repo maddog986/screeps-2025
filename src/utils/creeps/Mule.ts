@@ -58,10 +58,12 @@ export default class Mule extends CreepBaseClass {
     if (this.hasFreeCapacity()) {
       const mules = utils.creeps({ role: ROLE.mule, job: JOB.transfer, id_not: this.creep.id })
 
+      const total_harvesters = utils.creeps({ role: ROLE.harvester, usedCapacity: 10 }).length
+
       // harvesters within 3 range
       const harvesters = this.creep.pos.findInRange(FIND_MY_CREEPS, 5, {
         filter: ({ id, store, memory: { role, transfer } }) => role === ROLE.harvester &&
-          store.getUsedCapacity() >= 5 && id !== this.last_target &&
+          store.getUsedCapacity() >= 5 && (total_harvesters === 1 || id !== this.last_target) &&
 
           // only take from harvesters that have enough energy to cover already assigned mules
           mules.filter(({ memory: { target } }) => target === id).reduce((a, b) => a + b.store.getFreeCapacity(), 0) < store.getUsedCapacity(RESOURCE_ENERGY)
