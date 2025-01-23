@@ -1,4 +1,5 @@
 import Builder from 'utils/creeps/Builder'
+import { TargetManager, TargetType } from 'utils/creeps/creep_memory'
 import { JOB, ROLE } from 'utils/creeps/CreepBaseClass'
 import Harvester from 'utils/creeps/Harvester'
 import Mule from 'utils/creeps/Mule'
@@ -48,6 +49,13 @@ declare global {
 
     _travel?: TravelerMemory
     _move?: any
+
+    _targets?: TargetType[]
+    _lastTarget?: TargetType
+  }
+
+  interface Creep {
+    _targets: TargetManager
   }
 
   // Syntax for adding proprties to `global` (ex "global.log")
@@ -122,6 +130,11 @@ export const loop = () => {
     if (room.controller?.my) {
       const roomManager = new RoomManager(room)
       roomManager.run()
+
+      if (Game.time % 10 === 0) {
+        const controllerLevel = room.controller.level + (room.controller.progress / room.controller.progressTotal)
+        console.log(`Room ${room.name} level: ${controllerLevel.toFixed(2)}`)
+      }
     }
 
     // find all dropped resources

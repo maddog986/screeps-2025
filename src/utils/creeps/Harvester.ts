@@ -1,5 +1,6 @@
+import { CONFIG } from 'config'
 import utils from 'utils/utils'
-import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
+import { CreepBaseClass, JOBS, ROLE } from './CreepBaseClass'
 
 export default class Harvester extends CreepBaseClass {
     static loadout(room: Room) {
@@ -16,7 +17,7 @@ export default class Harvester extends CreepBaseClass {
 
         let source_walkable_positions = sources
             .reduce((acc, s) => {
-                return acc + utils.walkablePositions(s.pos, 1)
+                return acc + Math.min(CONFIG.maxHarvestersPerSource, utils.walkablePositions(s.pos, 1))
             }, 0)
 
         let body: BodyPartConstant[] = [WORK, CARRY, MOVE]
@@ -60,9 +61,12 @@ export default class Harvester extends CreepBaseClass {
     findTarget() {
         const has_move_part = this.creep.body.some(({ type }) => type === MOVE)
 
+        this.findJob([JOBS.renew])
+        if (this.target) return
+
         // can an find energy source
         if (!has_move_part || this.hasFreeCapacity()) {
-            this.findJob([ASSIGNMENT.harvest])
+            this.findJob([JOBS.harvest])
         }
 
         // can the creep do something with stored energy?
@@ -71,12 +75,17 @@ export default class Harvester extends CreepBaseClass {
             const mules = utils.creeps({ role: ROLE.mule }).length
 
             if (mules === 0) {
-                this.findJob([ASSIGNMENT.refill_spawn])
+                this.findJob([JOBS.refill_spawn])
             }
         }
     }
 
-    harvest(): any {
+    harvest(target: Source): any {
+        // signal to renew if lifeTime is low
+        if (this.creep.ticksToLive && this.creep.ticksToLive <= CONFIG.autoRenewCreepLevel) {
+            return this.removeTarget(target)
+        }
+
         // if (this.target && this.creep.memory.target_time && this.creep.memory.target_time > 0) {
         //     if (this.target instanceof Source && this.target.energy === 0) {
         //         return false // wait for energy to come back
@@ -84,85 +93,41 @@ export default class Harvester extends CreepBaseClass {
         // }
 
         // if (this.target instanceof Source && this.target.energy === 0) {
-        //     return this.clearTarget() // wait for energy to come back
+        //     return this.removeTarget() // wait for energy to come back
         // }
 
-        const work_parts = this.creep.body.filter(({ type }) => type === WORK).length
-        const move_parts = this.creep.body.filter(({ type }) => type === MOVE).length
+        // const work_parts = this.creep.body.filter(({ type }) => type === WORK).length
+        // const move_parts = this.creep.body.filter(({ type }) => type === MOVE).length
 
-        if (move_parts === 0 && this.creep.store.getFreeCapacity() < work_parts * HARVEST_POWER) {
-            return
-        }
+        // if (move_parts === 0 && this.creep.store.getFreeCapacity() < work_parts * HARVEST_POWER) {
+        //     const spawn = this.creep.room.find(FIND_MY_SPAWNS).shift()
 
-        super.harvest()
+        //     const source = this.creep.room.find(FIND_SOURCES_ACTIVE)
+        //         // find closest to spawn
+        //         .sort((a, b) => a.pos.getRangeTo(spawn!.pos) - b.pos.getRangeTo(spawn!.pos))
+        //         .shift()
+
+        //     if (source && source.id !== this.creep.memory.target) {
+        //         // does source have positions left?
+        //         const walkable_positions = utils.walkablePositions(source.pos, 1)
+        //         const harvesters_assigned = utils.creeps({ target: source.id }).length
+
+        //         if (walkable_positions > harvesters_assigned) {
+        //             this.creep.memory.target = source.id
+        //         }
+        //     }
+
+        //     return
+        // }
+
+        super.job_harvest(target)
     }
 
     run() {
         super.run()
 
-        // if already transfered, return
-        if (this.transfer_code === OK) {
-            return
-        }
-
-        // if hasent worked, find a nearby construction site
-        if (this.creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0 && this.work_code !== OK) {
-            const construction_site = this.creep.pos.findInRange(FIND_MY_CONSTRUCTION_SITES, 4).shift()
-
-            if (construction_site) {
-                this.work_code = this.creep.build(construction_site)
-            }
-
-            if (this.work_code !== OK) {
-                // find something to repair
-                const repair = this.creep.pos.findInRange(FIND_STRUCTURES, 3, {
-                    filter: (s) => s.hits < s.hitsMax
-                }).shift()
-
-                if (repair) {
-                    this.work_code = this.creep.repair(repair)
-                }
-            }
-        }
-
-        // find a mule creep nearby to transfer to
-        const mule = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
-            filter: ({ memory: { role, transfer, job }, store }) => store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
-                [ROLE.mule, ROLE.builder, ROLE.upgrader].includes(role as any) && job !== JOB.assist
-        })
-
-        if (mule) {
-            this.transfer_code = this.creep.transfer(mule, RESOURCE_ENERGY)
-
-            // if mules target is self, clear target
-            if (mule.memory.target === this.creep.id) {
-                delete mule.memory.job
-                delete mule.memory.target
-            }
-        }
-
-        // if already transfered, return
-        if (this.transfer_code === OK) {
-            return
-        }
-
-        // find a harvester nearby to transfer a small amount to
-        const harvester = this.creep.pos.findClosestByPath(FIND_MY_CREEPS, {
-            filter: ({ memory: { role }, store }) => store.getFreeCapacity(RESOURCE_ENERGY) >= 5 &&
-                role === ROLE.harvester
-        })
-
-        if (harvester) {
-            this.transfer_code = this.creep.transfer(harvester, RESOURCE_ENERGY, Math.min(5, harvester.store.getFreeCapacity(RESOURCE_ENERGY), this.creep.store.getUsedCapacity(RESOURCE_ENERGY)))
-        }
-
-        // if already transfered, return
-        if (this.transfer_code === OK) {
-            return
-        }
-
         // pickup dropped energy if not full
-        if (this.creep.store.getFreeCapacity() > 0 && this.pickup_code !== OK) {
+        if (this.pickup_code !== OK && this.hasFreeCapacity()) {
             const dropped_energy = this.creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
                 filter: ({ resourceType }) => resourceType === RESOURCE_ENERGY
             })
@@ -171,13 +136,63 @@ export default class Harvester extends CreepBaseClass {
             }
         }
 
-        // find a nearby container to transfer to
-        const container = this.creep.pos.findClosestByPath(FIND_STRUCTURES, {
-            filter: (c) => c.structureType === STRUCTURE_CONTAINER && c.store.getFreeCapacity(RESOURCE_ENERGY) > 0
-        })
+        // if no work was done, find a nearby construction site
+        if (this.work_code !== OK && this.hasUsedCapacity()) {
+            const construction_sites = this.creep.pos.findInRange(FIND_MY_CONSTRUCTION_SITES, 4)
 
-        if (container) {
-            this.transfer_code = this.creep.transfer(container, RESOURCE_ENERGY)
+            if (construction_sites.length) {
+                this.work_code = this.creep.build(construction_sites[0])
+            }
+
+            if (this.work_code !== OK) {
+                // find something to repair
+                const repairs = this.creep.pos.findInRange(FIND_STRUCTURES, 3, {
+                    filter: (s) => s.hits < s.hitsMax
+                })
+
+                if (repairs.length) {
+                    this.work_code = this.creep.repair(repairs[0])
+                }
+            }
+        }
+
+        // find a nearby container to transfer to
+        if (this.transfer_code !== OK && this.hasUsedCapacity()) {
+            const container = this.creep.pos.findClosestByPath(FIND_STRUCTURES, {
+                filter: (c) => c.structureType === STRUCTURE_CONTAINER && c.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            })
+
+            if (container) {
+                this.transfer_code = this.creep.transfer(container, RESOURCE_ENERGY)
+            }
+        }
+
+        // find a mule creep nearby to transfer to
+        if (this.transfer_code !== OK) {
+            const mules = utils.creeps({ inRange: [this.creep.pos, 1], role: [ROLE.mule, ROLE.builder, ROLE.upgrader], job_not: JOBS.assist })
+
+            if (mules.length) {
+                const mule = mules[0]
+
+                this.transfer_code = this.creep.transfer(mule, RESOURCE_ENERGY)
+                // console.log(`${this.creep.name} transfer to ${mule.name} code: ${this.transfer_code}`)
+
+                // if mules target is self, clear target
+                if (mule.memory.target === this.creep.id || (mule.memory.job === JOBS.withdraw && mule.store.getFreeCapacity() === 0)) {
+                    delete mule.memory.job
+                    delete mule.memory.target
+                }
+            }
+        }
+
+        // if already transfered, return
+        if (this.transfer_code !== OK) {
+            const harvesters = utils.creeps({ inRange: [this.creep.pos, 1], role: [ROLE.harvester], freeCapacity: 10 })
+
+            if (harvesters.length) {
+                const harvester = harvesters[0]
+                this.transfer_code = this.creep.transfer(harvester, RESOURCE_ENERGY, Math.min(10, harvester.store.getFreeCapacity(RESOURCE_ENERGY), this.creep.store.getUsedCapacity(RESOURCE_ENERGY)))
+            }
         }
     }
 }

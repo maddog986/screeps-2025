@@ -1,5 +1,5 @@
 import utils from 'utils/utils'
-import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
+import { CreepBaseClass, JOBS, ROLE } from './CreepBaseClass'
 
 export default class Builder extends CreepBaseClass {
   static loadout(room: Room) {
@@ -26,20 +26,23 @@ export default class Builder extends CreepBaseClass {
   findTarget() {
     const mules = utils.creeps({ role: ROLE.mule })
     if (mules.length === 0) {
-      this.findJob([ASSIGNMENT.assist])
+      this.findJob([JOBS.assist])
       if (this.target) return
     }
 
+    this.findJob([JOBS.renew])
+    if (this.target) return
+
     // if mule can store more, see if a harvester is nearby
     if (this.hasFreeCapacity()) {
-      const mules = utils.creeps({ role: ROLE.mule, job: JOB.transfer, id_not: this.creep.id })
+      const mules = utils.creeps({ role: ROLE.mule, job: JOBS.transfer, id_not: this.creep.id })
 
       const total_harvesters = utils.creeps({ role: ROLE.harvester }).length
 
       // harvesters within 3 range
       const harvesters = this.creep.pos.findInRange(FIND_MY_CREEPS, 5, {
         filter: ({ id, store, memory: { role, transfer } }) => role === ROLE.harvester &&
-          store.getUsedCapacity() >= 5 && (total_harvesters === 1 || id !== this.last_target) &&
+          store.getUsedCapacity() >= 5 && (total_harvesters === 1 || id !== this.lastTargetId()) &&
 
           // only take from harvesters that have enough energy to cover already assigned mules
           mules.filter(({ memory: { target } }) => target === id).reduce((a, b) => a + b.store.getFreeCapacity(), 0) < store.getUsedCapacity(RESOURCE_ENERGY)
@@ -48,7 +51,7 @@ export default class Builder extends CreepBaseClass {
       if (harvesters.length > 0) {
         const harvester = this.creep.pos.findClosestByPath(harvesters)
         if (harvester) {
-          this.setTarget(harvester, JOB.withdraw)
+          this.setTarget(harvester, JOBS.withdraw)
           return
         }
       }
@@ -57,32 +60,32 @@ export default class Builder extends CreepBaseClass {
 
     // can the creep do something with stored energy?
     if (this.hasUsedCapacity()) {
-      this.findJob([ASSIGNMENT.refill_spawn, ASSIGNMENT.build, ASSIGNMENT.repair, ASSIGNMENT.upgrade_controller])
+      this.findJob([JOBS.refill_spawn, JOBS.build, JOBS.repair, JOBS.upgrade_controller])
     }
 
     // find an energy source
     if (this.hasFreeCapacity()) {
-      this.findJob([ASSIGNMENT.withdraw_container, ASSIGNMENT.withdraw_harvester, ASSIGNMENT.harvest])
+      this.findJob([JOBS.withdraw_container, JOBS.withdraw_harvester, JOBS.harvest])
     }
 
     super.findTarget()
   }
 
-  upgrade_controller(): any {
+  job_upgrade_controller(target: StructureController): any {
     // clear target every 10 ticks
     if (this.creep.memory.target_time && this.creep.memory.target_time % 10 === 0) {
-      return this.clearTarget()
+      return this.removeTarget(target)
     }
 
-    super.upgrade_controller()
+    super.job_upgrade_controller(target)
   }
 
-  repair() {
+  job_repair(target: Structure): any {
     // clear target every 10 ticks
     if (this.creep.memory.target_time && this.creep.memory.target_time % 10 === 0) {
-      return this.clearTarget()
+      return this.removeTarget(target)
     }
 
-    super.repair()
+    super.job_repair(target)
   }
 }

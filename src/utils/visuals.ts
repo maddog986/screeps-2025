@@ -52,7 +52,7 @@ export function visual_structure({ room, x, y, type, opts = {} }: Layout) {
         case STRUCTURE_CONTAINER:
             room_visual.rect(x - 0.225, y - 0.3, 0.45, 0.6, {
                 fill: "yellow",
-                opacity: opts.opacity,
+                opacity: (opts.opacity || 1) * 0.6,
                 stroke: colors.dark,
                 strokeWidth: 0.10,
             })
@@ -237,18 +237,18 @@ export function visual_structure({ room, x, y, type, opts = {} }: Layout) {
             room_visual.circle(x, y, {
                 fill: colors.dark,
                 // fill: "transparent",
-                opacity: opts.opacity,
+                opacity: (opts.opacity || 1) * 0.6,
                 radius: 0.6,
                 stroke: colors.outline,
                 strokeWidth: 0.05,
             })
             room_visual.rect(x - 0.4, y - 0.3, 0.8, 0.6, {
                 fill: colors.gray,
-                opacity: opts.opacity,
+                opacity: (opts.opacity || 1) * 0.6,
             })
             room_visual.rect(x - 0.2, y - 0.8, 0.4, 0.45, {
                 fill: colors.light,
-                opacity: opts.opacity,
+                opacity: (opts.opacity || 1) * 0.6,
                 stroke: colors.dark,
                 strokeWidth: 0.07,
             })

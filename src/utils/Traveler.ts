@@ -1,7 +1,7 @@
 // Enhanced Traveler module with role-based priority, creep swapping, path caching, and CostMatrix support
 
 import { cache } from './cache'
-import { JOB, ROLE } from './creeps/CreepBaseClass'
+import { JOBS, ROLE } from './creeps/CreepBaseClass'
 import utils from './utils'
 
 type CreepRole = 'harvester' | 'mule' | 'builder' | 'upgrader'
@@ -30,8 +30,6 @@ interface TravelerOptions {
     highCost?: number    // Cost for high-priority areas
     edgeCost?: number    // Cost for tiles near edges
     wallCost?: number    // Cost for tiles near walls
-    wallBuffer?: number  // Buffer distance from walls
-    edgeMargin?: number  // Margin from the edges to avoid
     plainCost?: number   // Cost for plain tiles
     swampCost?: number   // Cost for swamp tiles
     roadCost?: number    // Cost for road tiles
@@ -103,7 +101,7 @@ export default class Traveler {
                 creep.memory._travel.lastPos = { x: creep.pos.x, y: creep.pos.y, roomName: creep.room.name } // Update last position
 
                 // Check and pull trailing creep if applicable
-                this.checkAndPullCreep(creep)
+                // this.checkAndPullCreep(creep)
 
                 return moveResult // Successfully moved
             } else {
@@ -177,7 +175,7 @@ export default class Traveler {
                 c.id !== creep.id &&
                 (
                     // not assigned to assisting
-                    c.memory.job !== JOB.assist ||
+                    c.memory.job !== JOBS.assist ||
 
                     // and not being pulled
                     utils.creeps({ role: ROLE.mule, target: c.id }).length > 0 ||
@@ -219,55 +217,44 @@ export default class Traveler {
             highCost = 8,           // Default high cost
             edgeCost = 200,         // Default edge cost
             wallCost = 15,          // Default wall cost
-            wallBuffer = 2,         // Default wall buffer
-            edgeMargin = 2,         // Default edge margin
             roadCost = 1,           // Default road cost
-            plainCost = 6,          // Default plain cost
-            swampCost = 10,         // Default swamp cost
+            plainCost = 3,          // Default plain cost
+            swampCost = 9,         // Default swamp cost
             ignoreCreeps = false,   // Default ignore creeps
         } = options
 
         const terrain = Game.map.getRoomTerrain(roomName)
 
-        // Add high costs to room edges
-        utils.getGridNeighbors(0, 0, 50)
-            .filter(([x, y]) => x < edgeMargin || x >= 50 - edgeMargin || y < edgeMargin || y >= 50 - edgeMargin)
-            .forEach(([x, y]) => costMatrix.set(x, y, edgeCost))
-
         // set swamp and plain costs
         utils.getGridNeighbors(0, 0, 50)
             // remap with terrain type
             .map(([x, y]) => ({ x, y, type: terrain.get(x, y) }))
             // set costs
             .forEach(({ x, y, type }) => {
-                if (type === TERRAIN_MASK_WALL) {
-                    costMatrix.set(x, y, 255)
-                } else if (type === TERRAIN_MASK_SWAMP) {
-                    costMatrix.set(x, y, swampCost)
-                } else {
-                    costMatrix.set(x, y, plainCost)
+                const cost = costMatrix.get(x, y)
+
+                switch (type) {
+                    case TERRAIN_MASK_WALL:
+                        costMatrix.set(x, y, 255)
+
+                        // get all positions around the wall to increase cost
+                        utils.getNeighbors(x, y, 1)
+                            // remove out of bounds
+                            .filter(([x, y]) => x >= 0 && x < 50 && y >= 0 && y < 50)
+                            // remap
+                            .map(([x, y]) => ({ x, y, cost: costMatrix.get(x, y) }))
+                            // set new cost
+                            .forEach(({ x, y, cost }) => {
+                                costMatrix.set(x, y, Math.min(255, cost + highCost))
+                            })
+                        break
+                    case TERRAIN_MASK_SWAMP:
+                        costMatrix.set(x, y, Math.min(255, cost + swampCost))
+                        break
+                    case 0:
+                        costMatrix.set(x, y, Math.min(255, cost + plainCost))
+                        break
                 }
-            })
-
-        // set swamp and plain costs
-        utils.getGridNeighbors(0, 0, 50)
-            // remap with terrain type
-            .map(([x, y]) => ({ x, y, type: terrain.get(x, y) }))
-            // set costs
-            .forEach(({ x, y, type }) => {
-                if (type !== TERRAIN_MASK_WALL) return
-
-                // get all positions around the wall to increase cost
-                utils.getNeighbors(x, y, 1)
-                    // remove out of bounds
-                    .filter(([x, y]) => x >= 0 && x < 50 && y >= 0 && y < 50)
-                    // remap
-                    .map(([x, y]) => ({ x, y, cost: costMatrix.get(x, y) }))
-                    // set new cost
-                    .forEach(({ x, y, cost }) => {
-                        costMatrix.set(x, y, Math.min(255, cost + highCost))
-                    })
-
             })
 
         // Mark positions within a distance of 4 around the controller
@@ -381,7 +368,7 @@ export default class Traveler {
         //     }
         // })
 
-        return costMatrix
+        return costMatrix.clone()
     }
 
     @cache("buildCreepCostMatrix", 1)

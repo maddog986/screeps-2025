@@ -1,6 +1,6 @@
 import Traveler from 'utils/Traveler'
 import utils from 'utils/utils'
-import { ASSIGNMENT, CreepBaseClass, JOB, ROLE } from './CreepBaseClass'
+import { CreepBaseClass, JOBS, ROLE } from './CreepBaseClass'
 
 export default class Mule extends CreepBaseClass {
   static loadout(room: Room) {
@@ -28,7 +28,7 @@ export default class Mule extends CreepBaseClass {
       const distance_to_sources = room.find(FIND_SOURCES, {
         filter: (s) =>
           // check if there are harvesters with target source
-          utils.creeps({ role: ROLE.harvester, target: s.id, usedCapacity: 50, notAssigned: true })
+          utils.creeps({ role: ROLE.harvester, target: s.id, usedCapacity: 25, notAssigned: true })
             // reduce down to total energy
             .reduce((acc, { store }) => acc + store.getUsedCapacity(RESOURCE_ENERGY), 0) > body_cost
       })
@@ -51,32 +51,26 @@ export default class Mule extends CreepBaseClass {
   }
 
   findTarget() {
-    this.findJob([ASSIGNMENT.assist])
-    if (this.target) return
+    this.findJob([JOBS.renew, JOBS.assist])
+    if (this.hasTarget()) return
 
     // if mule can store more, see if a harvester is nearby
     if (this.hasFreeCapacity()) {
-      const mules = utils.creeps({ role: ROLE.mule, job: JOB.transfer, id_not: this.creep.id })
+      const mules = utils.creeps({ role: ROLE.mule, job: JOBS.transfer, id_not: this.creep.id })
 
       const total_harvesters = utils.creeps({ role: ROLE.harvester, usedCapacity: 10 }).length
 
-      // harvesters within 3 range
-      const harvesters = this.creep.pos.findInRange(FIND_MY_CREEPS, 5, {
-        filter: ({ id, store, memory: { role, transfer } }) => role === ROLE.harvester &&
-          store.getUsedCapacity() >= 5 && (total_harvesters === 1 || id !== this.last_target) &&
+      const last_target_id = this.creep._targets.lastId()
 
-          // only take from harvesters that have enough energy to cover already assigned mules
-          mules.filter(({ memory: { target } }) => target === id).reduce((a, b) => a + b.store.getFreeCapacity(), 0) < store.getUsedCapacity(RESOURCE_ENERGY)
-      })
-        // sort by highest amount of stored energy first
-        .sort((a, b) => b.store.getUsedCapacity(RESOURCE_ENERGY) - a.store.getUsedCapacity(RESOURCE_ENERGY))
+      // harvesters within 3 range
+      const harvesters = utils.creeps({ id_not: last_target_id, role: ROLE.harvester, usedCapacity: 5, notOverAssigned: true, sortByUsedCapacity: true })
         // grab last few
         .slice(0, 3)
 
       if (harvesters.length > 0) {
         const harvester = this.creep.pos.findClosestByPath(harvesters)
         if (harvester) {
-          this.setTarget(harvester, JOB.withdraw)
+          this.setTarget(harvester, JOBS.withdraw)
           return
         }
       }
@@ -86,12 +80,12 @@ export default class Mule extends CreepBaseClass {
 
     // can the creep do something with stored energy?
     if (!this.target && this.hasUsedCapacity()) {
-      this.findJob([ASSIGNMENT.refill_spawn, ASSIGNMENT.refill_upgrader, ASSIGNMENT.refill_builder])
+      this.findJob([JOBS.refill_spawn, JOBS.refill_upgrader, JOBS.refill_builder])
     }
 
     // can an find energy source
     if (!this.target && this.hasFreeCapacity()) {
-      this.findJob([ASSIGNMENT.withdraw_container, ASSIGNMENT.withdraw_harvester])
+      this.findJob([JOBS.withdraw_container, JOBS.withdraw_harvester])
     }
 
     super.findTarget()
@@ -99,6 +93,19 @@ export default class Mule extends CreepBaseClass {
 
   run() {
     super.run()
+
+    if (this.transfer_code !== OK && this.hasUsedCapacity()) {
+      utils.creeps({ role: ROLE.mule, id_not: this.creep.id, freeCapacity: 5, usedCapacity: this.creep.store.getUsedCapacity() })
+        .forEach(creep => {
+          if (this.transfer_code === OK) return
+
+          this.transfer_code = this.creep.transfer(creep, RESOURCE_ENERGY)
+
+          if (creep.store.getFreeCapacity() === 0) {
+            delete creep.memory.target
+          }
+        })
+    }
 
     if (this.target) return
     if (this.move_code === OK) return

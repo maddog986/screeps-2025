@@ -80,7 +80,7 @@ export default class RoomManager {
             for (let y = 0; y < 50; y++) {
                 for (let x = 0; x < 50; x++) {
                     const cost = room_matrix.get(x, y)
-                    this.room.visual.text(cost.toString(), x, y, {
+                    this.room.visual.text(cost.toString(), x, y + 0.1, {
                         font: '0.4 Arial',
                         opacity: 0.35
                     })
@@ -151,8 +151,6 @@ export default class RoomManager {
                     continue
                 }
 
-                console.log(role, 'partsCost:', partsCost, 'max:', creepSetup[role].max, 'energyAvailable:', spawn.room.energyAvailable)
-
                 if (partsCost > spawn.room.energyAvailable) {
                     continue
                 }
@@ -180,8 +178,13 @@ export default class RoomManager {
                 })
 
                 if (spawned === OK) {
-                    this.room.memory.spawn_next = Game.time + CONFIG.spawnRate
-                    console.log(`Spawned new ${role}: ${newName}`)
+                    // how long will the creep take to spawn?
+                    const ticksToSpawn = Math.ceil(creepSetup[role].body.length * CREEP_SPAWN_TIME)
+
+                    // set the next possible spawn time
+                    this.room.memory.spawn_next = Game.time + ticksToSpawn + CONFIG.spawnRate
+
+                    console.log(`Spawned new ${role}: ${newName} partsCost: ${partsCost} max: ${creepSetup[role].max} energyAvailable: ${spawn.room.energyAvailable} new spawn in: ${Game.time - this.room.memory.spawn_next}`)
                     break
                 } else {
                     console.log(`Failed to spawn new ${role}: ${newName}. Code: ${spawned}`)

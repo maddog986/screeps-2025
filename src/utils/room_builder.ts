@@ -8,28 +8,6 @@ interface SimplePositions {
     [name: string]: number[][]
 }
 
-// Parse layout into structure positions
-function getBuildPositions(layout: string[]): SimplePositions {
-    if (!layout.length) return {}
-
-    const height = layout.length
-    const width = layout[0].length
-    const centerY = Math.floor(height / 2)
-    const centerX = Math.floor(width / 2)
-    const positions: SimplePositions = {}
-
-    layout.forEach((row, y) => {
-        row.split('').forEach((char, x) => {
-            const structure = layoutKey[char]
-            if (!structure) return
-            positions[structure] = positions[structure] || []
-            positions[structure].push([x - centerX, y - centerY])
-        })
-    })
-
-    return positions
-}
-
 interface StructurePosition {
     x: number
     y: number
@@ -37,161 +15,182 @@ interface StructurePosition {
     level: number
 }
 
-function rotateStructures(allStructures: StructurePosition[], centerPoint: RoomPosition, angleDegrees: number) {
-    const angleRadians = (Math.PI / 180) * angleDegrees // Convert degrees to radians
-    const cosAngle = Math.cos(angleRadians)
-    const sinAngle = Math.sin(angleRadians)
-
-    for (const structure of allStructures) {
-        // Translate point relative to the center
-        const relX = structure.x - centerPoint.x
-        const relY = structure.y - centerPoint.y
-
-        // Rotate the point
-        const rotatedX = Math.round(relX * cosAngle - relY * sinAngle)
-        const rotatedY = Math.round(relX * sinAngle + relY * cosAngle)
-
-        // Translate back
-        structure.x = centerPoint.x + rotatedX
-        structure.y = centerPoint.y + rotatedY
-    }
-}
-
 export default class RoomBuilder {
     room: Room
-    buildable_structures: StructurePosition[]
+    allStructures: AnyStructure[]
+    containers: AnyStructure[]
+    constructureSites: ConstructionSite<BuildableStructureConstant>[]
+    spawns: StructureSpawn[]
+    sources: Source[]
+    spawn: StructureSpawn | undefined
+
+    cache() {
+        return "room_builder"
+    }
 
     constructor(room: Room) {
         this.room = room
-        this.buildable_structures = []
 
-        this.process_structures()
+        this.constructureSites = this.room.find(FIND_MY_CONSTRUCTION_SITES)
+        this.sources = this.room.find(FIND_SOURCES)
+        this.allStructures = this.room.find(FIND_STRUCTURES)
+        this.containers = this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_CONTAINER)
+        this.spawns = this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_SPAWN) as StructureSpawn[]
+        this.spawn = this.spawns[0]
     }
 
-    @cache("find", 1)
-    find<S extends AnyStructure>(find: FindConstant): S[] {
-        return this.room.find(find)
+    // Parse layout into structure positions
+    setBuildPositions(layout: string[], center: RoomPosition, level: number): StructurePosition[] {
+        if (!layout.length) return []
+
+        const height = layout.length
+        const width = layout[0].length
+        const centerY = Math.floor(height / 2)
+        const centerX = Math.floor(width / 2)
+
+        const buildable_structures: StructurePosition[] = []
+
+        layout.forEach((row, y) => {
+            row.split('').forEach((char, x) => {
+                const structure = layoutKey[char]
+                if (!structure || structure === STRUCTURE_SPAWN) return
+                buildable_structures.push({
+                    x: center.x + (x - centerX),
+                    y: center.y + (y - centerY),
+                    structure,
+                    level,
+                })
+            })
+        })
+
+        return buildable_structures
     }
 
-    process_structures() {
-        const buildOrder = CONFIG.buildOrder[this.room.name]
-        if (!buildOrder) return
+    filterPositions(buildable_structures: StructurePosition[]): StructurePosition[] {
+        // remove positions that are not clear
+        return buildable_structures
+            // remove duplicates with a higher level
+            .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure && t.level < v.level) === -1)
 
-        const spawn = this.find(FIND_MY_SPAWNS).shift()
-        if (!spawn) return
+            // remove structures that are blocked
+            .filter(({ x, y }) => utils.isWalkable(this.room, x, y))
+    }
 
-        this.buildable_structures = []
+    @cache("process_structures", 1)
+    process_structures(): StructurePosition[] {
+        const buildOrder = CONFIG.build.build_orders[this.room.name]
+        if (!buildOrder || !this.spawn) return []
+
+        // this.spawns = Object.values(Game.spawns)//.filter(({ my, room }) => my && room.name === this.room.name) //.this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_SPAWN) as StructureSpawn[]
+        // this.spawn = this.spawns[0]
+
+        let buildable_structures: StructurePosition[] = []
 
         for (const level in buildOrder) {
-            const layout = buildOrder[level]
-            if (!layout) continue
-
-            const positions = getBuildPositions(layout)
-            for (const structure in positions) {
-                positions[structure].forEach(([x, y]) => {
-                    // is this position clear?
-                    const structures = this.room.lookAt(spawn.pos.x + x, spawn.pos.y + y)
-                    if (structures.some(({ type }) => type === "structure" || type === "constructionSite")) return
-
-                    this.buildable_structures.push({
-                        x: spawn.pos.x + x,
-                        y: spawn.pos.y + y,
-                        structure,
-                        level: Number(level),
-                    })
-                })
-            }
+            // add layout to the buildable_structures
+            buildable_structures.push(...this.setBuildPositions(buildOrder[level], this.spawn.pos, Number(level)))
         }
 
-        // rotate the structures
-        if (CONFIG.buildRotate) {
-            rotateStructures(this.buildable_structures, spawn.pos, CONFIG.buildRotate)
-        }
-
-        const allStructures = this.find(FIND_STRUCTURES)
-        const containers = allStructures.filter(({ structureType }) => structureType === STRUCTURE_CONTAINER)
-        const constructureSites = this.find(FIND_MY_CONSTRUCTION_SITES)
-        const spawns = this.find(FIND_MY_SPAWNS)
-        const sources = this.find(FIND_SOURCES)
+        buildable_structures = this.filterPositions(buildable_structures)
 
         // add a container near sources
-        sources
+        this.sources
             .forEach((source) => {
-                const optimalPosition = utils.findOptimalPosition(this.room, source.pos, 1)
-                if (!optimalPosition) return
+                // look for containers near source
+                const container_near_source = this.containers
+                    // get all containers near source
+                    .filter(({ pos }) => utils.inRangeTo(source.pos, pos, 3))
+                    // remap to structure positions
+                    .map(({ pos }) => ({ x: pos.x, y: pos.y, structure: STRUCTURE_CONTAINER, level: CONFIG.build.auto_build_roads_level }))
+                    // get first item
+                    .shift()
 
-                this.buildable_structures.push({ x: optimalPosition.x, y: optimalPosition.y, structure: STRUCTURE_CONTAINER, level: 3 })
+                if (container_near_source) return
+
+                const optimalPosition = utils.findOptimalPosition(this.room, source.pos, 1)
+                if (!optimalPosition) {
+                    console.log('BUILDER ISSUE: No optimal position found for container near source:', source)
+                    return
+                }
+
+                buildable_structures.push({ x: optimalPosition.x, y: optimalPosition.y, structure: STRUCTURE_CONTAINER, level: 3 })
             })
 
         // build roads to sources
-        spawns.forEach((spawn) => {
-            sources.forEach((source) => {
+        this.spawns.forEach((spawn) => {
+            this.sources.forEach((source) => {
                 // look for containers near source
-                const container_near_source = allStructures
+                const container_near_source = this.containers
                     // get all containers near source
-                    .filter(({ pos, structureType }) => structureType === STRUCTURE_CONTAINER && utils.inRangeTo(source.pos, pos, 2))
+                    .filter(({ pos }) => utils.inRangeTo(source.pos, pos, 2))
                     // remap to structure positions
-                    .map(({ pos }) => ({ x: pos.x, y: pos.y, structure: STRUCTURE_CONTAINER, level: CONFIG.buildContainers }))
+                    .map(({ pos }) => ({ x: pos.x, y: pos.y, structure: STRUCTURE_CONTAINER, level: CONFIG.build.auto_build_roads_level }))
                     // get first item
                     .shift()
 
                 if (container_near_source) {
-                    this.buildable_structures.push(container_near_source)
+                    buildable_structures.push(container_near_source)
                 }
 
-                const container_pos = this.buildable_structures
-                    .find(({ x, y, structure }) => structure === STRUCTURE_CONTAINER && utils.inRangeTo(source.pos, new RoomPosition(x, y, this.room.name), 2))
-                if (!container_pos) return
+                const container_pos = buildable_structures
+                    .find(({ x, y, structure }) => structure === STRUCTURE_CONTAINER && utils.inRangeTo(source.pos, new RoomPosition(x, y, source.room.name), 2))
+
+                if (!container_pos) {
+                    console.log("BUILDER ISSUE: No container position found near source:", source)
+                    return
+                }
 
                 // find a path to the source
-                new RoomPosition(container_pos.x, container_pos.y, this.room.name).findPathTo(spawn.pos, {
-                    range: 1,
-                    ignoreCreeps: true,
-                    maxOps: 5000,
-                    maxRooms: 1,
-                    costCallback: (roomName, costMatrix) => {
-                        costMatrix = Traveler.buildRoomCostMatrix(roomName, costMatrix, {
-                            swampCost: 1,
-                            plainCost: 1,
-                            ignoreCreeps: true
-                        })
+                new RoomPosition(container_pos.x, container_pos.y, this.room.name)
+                    .findPathTo(spawn.pos, {
+                        range: 1,
+                        ignoreCreeps: true,
+                        maxOps: 5000,
+                        maxRooms: 1,
+                        costCallback: (roomName, costMatrix) => {
+                            costMatrix = Traveler.buildRoomCostMatrix(roomName, costMatrix, {
+                                swampCost: 15,
+                                plainCost: 15,
+                                ignoreCreeps: true
+                            })
 
-                        for (const { x, y, structure } of this.buildable_structures) {
-                            if (structure === STRUCTURE_WALL) {
-                                costMatrix.set(x, y, 255)
-                            } else if (structure === STRUCTURE_ROAD || structure === STRUCTURE_CONTAINER) {
-                                costMatrix.set(x, y, 1)
-                            } else {
-                                costMatrix.set(x, y, 255)
+                            for (const { x, y, structure } of buildable_structures) {
+                                if (structure === STRUCTURE_WALL) {
+                                    costMatrix.set(x, y, 255)
+                                } else if (structure === STRUCTURE_ROAD) {
+                                    costMatrix.set(x, y, 1)
+                                } else {
+                                    costMatrix.set(x, y, 255)
+                                }
                             }
-                        }
 
-                        return costMatrix
-                    },
-                })
+                            return costMatrix
+                        },
+                    })
+
                     .forEach(({ x, y }) => {
-                        this.buildable_structures.push({ x: x, y, structure: STRUCTURE_ROAD, level: CONFIG.buildRoads })
+                        buildable_structures.push({ x: x, y, structure: STRUCTURE_ROAD, level: CONFIG.build.auto_build_roads_level })
                     })
 
                 // remove container_near_source from buildable_structures
-                const index = this.buildable_structures.findIndex(({ x, y }) => x === container_pos.x && y === container_pos.y)
-                if (index >= 0) {
-                    this.buildable_structures.splice(index, 1)
+                if (container_near_source) {
+                    const index = buildable_structures.findIndex(({ x, y, structure }) => x === container_near_source.x && y === container_near_source.y && structure === STRUCTURE_CONTAINER)
+                    if (index >= 0) {
+                        buildable_structures.splice(index, 1)
+                    }
                 }
             })
-
-            // remove duplicates from all_structures if there is a higher level
-            this.buildable_structures = this.buildable_structures
-                .filter((v, i, a) => a.findIndex(t => (t.x === v.x && t.y === v.y && t.structure === v.structure) && t.level < v.level) === -1)
         })
 
-        this.buildable_structures = this.buildable_structures
-            .filter(({ x, y }) => this.room.lookAt(x, y).some(({ type }) => type !== "structure" && type !== "constructionSite"))
-
+        return this.filterPositions(buildable_structures)
     }
 
     draw_structures() {
-        for (const { x, y, structure, level } of this.buildable_structures) {
+        if (!CONFIG.visuals.enabled) return
+
+        const buildable_structures = this.process_structures()
+
+        for (const { x, y, structure, level } of buildable_structures) {
             visual_structure({
                 room: this.room,
                 x: x,
@@ -201,27 +200,21 @@ export default class RoomBuilder {
             })
         }
 
-        const allStructures = this.find(FIND_STRUCTURES)
-        const constructureSites = this.find(FIND_MY_CONSTRUCTION_SITES)
-        const roads: StructurePosition[] = [...allStructures, ...constructureSites]
+        const roads: StructurePosition[] = [...this.allStructures, ...this.constructureSites]
             // filter out roads
             .filter(({ structureType }) => structureType === STRUCTURE_ROAD)
             // remap to structure positions
-            .map(({ pos }) => ({ x: pos.x, y: pos.y, level: 3, structure: STRUCTURE_ROAD }))
+            .map(({ pos }) => ({ x: pos.x, y: pos.y, level: CONFIG.build.auto_build_roads_level, structure: STRUCTURE_ROAD }))
 
-        const temp_roads = this.buildable_structures.filter(({ structure }) => structure === STRUCTURE_ROAD)
-        roads.push(...temp_roads)
+        roads.push(...buildable_structures.filter(({ structure }) => structure === STRUCTURE_ROAD))
 
         roads
-            // remove duplicates from all_structures if there is a lower level
-            .filter((v, i, a) => a.findIndex(t => (t.x === v.x && t.y === v.y && t.structure === v.structure) && t.level < v.level) === -1)
-
             .forEach(({ x, y, level }) => {
                 // Get neighboring positions around the current road
                 const neighbors = utils.getNeighbors(x, y, 1)
 
                 neighbors.forEach(([dx, dy]) => {
-                    if (this.room.lookAt(dx, dy).some(({ type }) => type === "structure" || type === "constructionSite")) return
+                    if (!utils.isWalkable(this.room, dx, dy)) return
 
                     if (roads.some(({ x: nx, y: ny }) => nx === dx && ny === dy)) {
                         this.room.visual.line(dx, dy, x, y, { color: "#666", opacity: 0.25, width: 0.45 })
@@ -229,14 +222,17 @@ export default class RoomBuilder {
                 })
             })
 
-        if (CONFIG.visuals.show_build_levels) {
-            for (const { x, y, structure, level } of this.buildable_structures) {
-                // draw text above the structure with level
-                this.room.visual.text(level.toString(), x, y + 0.15, {
-                    font: '0.4 Arial',
-                    opacity: 0.75
-                })
-            }
+        if (!CONFIG.build.show_build_levels) return
+
+        const controllerLevel = this.room.controller!.level + (this.room.controller!.progress / this.room.controller!.progressTotal)
+
+        for (const { x, y, structure, level } of buildable_structures) {
+            // draw text above the structure with level
+            this.room.visual.text(level.toString(), x, y + 0.1, {
+                font: '0.3 Arial',
+                color: structure === STRUCTURE_CONTAINER ? '#000' : (controllerLevel >= level ? 'yellow' : '#fff'),
+                opacity: 0.75
+            })
         }
     }
 
@@ -246,15 +242,21 @@ export default class RoomBuilder {
     }
 
     build_structures() {
-        const constructionSites = this.find(FIND_MY_CONSTRUCTION_SITES)
+        const constructionSites = this.constructureSites
         if (constructionSites.length >= CONFIG.build.max_constructions) return
 
-        const spawn = this.find(FIND_MY_SPAWNS).shift()
+        const spawn = this.spawn
         if (!spawn) return
+
+        const controllerLevel = this.room.controller!.level + (this.room.controller!.progress / this.room.controller!.progressTotal)
+
+        const buildable_structures = this.process_structures()
+            // filter out higher levels
+            .filter(({ level }) => level <= controllerLevel)
 
         const buildables = []
 
-        const towers = this.buildable_structures
+        const towers = buildable_structures
             .filter(({ structure }) => structure === STRUCTURE_TOWER)
             // sort by closest to spawn
             .sort((a, b) => utils.getRangeTo(new RoomPosition(a.x, a.y, this.room.name), spawn.pos) - utils.getRangeTo(new RoomPosition(b.x, b.y, this.room.name), spawn.pos))
@@ -263,7 +265,7 @@ export default class RoomBuilder {
             buildables.push(...towers)
         }
 
-        const extensions = this.buildable_structures
+        const extensions = buildable_structures
             .filter(({ structure }) => structure === STRUCTURE_EXTENSION)
             // sort by closest to spawn
             .sort((a, b) => utils.getRangeTo(new RoomPosition(a.x, a.y, this.room.name), spawn.pos) - utils.getRangeTo(new RoomPosition(b.x, b.y, this.room.name), spawn.pos))
@@ -272,7 +274,7 @@ export default class RoomBuilder {
             buildables.push(...extensions)
         }
 
-        const containers = this.buildable_structures
+        const containers = buildable_structures
             .filter(({ structure }) => structure === STRUCTURE_CONTAINER)
             // sort by closest to spawn
             .sort((a, b) => utils.getRangeTo(new RoomPosition(a.x, a.y, this.room.name), spawn.pos) - utils.getRangeTo(new RoomPosition(b.x, b.y, this.room.name), spawn.pos))
@@ -281,7 +283,7 @@ export default class RoomBuilder {
             buildables.push(...containers)
         }
 
-        const roads = this.buildable_structures
+        const roads = buildable_structures
             .filter(({ structure }) => structure === STRUCTURE_ROAD)
             // sort by closest to spawn
             .sort((a, b) => utils.getRangeTo(new RoomPosition(a.x, a.y, this.room.name), spawn.pos) - utils.getRangeTo(new RoomPosition(b.x, b.y, this.room.name), spawn.pos))
@@ -290,7 +292,7 @@ export default class RoomBuilder {
             buildables.push(...roads)
         }
 
-        const ramparts = this.buildable_structures
+        const ramparts = buildable_structures
             .filter(({ structure }) => structure === STRUCTURE_RAMPART)
             // sort by closest to spawn
             .sort((a, b) => utils.getRangeTo(new RoomPosition(a.x, a.y, this.room.name), spawn.pos) - utils.getRangeTo(new RoomPosition(b.x, b.y, this.room.name), spawn.pos))
@@ -299,7 +301,7 @@ export default class RoomBuilder {
             buildables.push(...ramparts)
         }
 
-        const walls = this.buildable_structures
+        const walls = buildable_structures
             .filter(({ structure }) => structure === STRUCTURE_WALL)
             // sort by closest to spawn
             .sort((a, b) => utils.getRangeTo(new RoomPosition(a.x, a.y, this.room.name), spawn.pos) - utils.getRangeTo(new RoomPosition(b.x, b.y, this.room.name), spawn.pos))
@@ -309,7 +311,7 @@ export default class RoomBuilder {
         }
 
         // whatever is left
-        const whatever = this.buildable_structures
+        const whatever = buildable_structures
 
         if (whatever) {
             buildables.push(...whatever)
@@ -324,12 +326,12 @@ export default class RoomBuilder {
     }
 
     run() {
-        if (CONFIG.visuals.enabled && CONFIG.visuals.show_build) {
-            this.draw_structures()
-        }
+        if (!CONFIG.build.enabled) return
 
-        if (CONFIG.build.enabled) {
-            this.build_structures()
+        this.build_structures()
+
+        if (CONFIG.build.show_build) {
+            this.draw_structures()
         }
     }
 }
