@@ -1,8 +1,22 @@
+declare global {
+    interface Memory {
+        cache: Record<string, {
+            key: string
+            value: any
+            ids?: string[]
+            serialized: boolean
+            expires: number
+            computedAt: number
+            cpuUsed: number
+        }>
+    }
+}
+
 const CacheStorage: Record<string, { value: any; serialized: boolean; expires: number }> = {}
 
 Memory.cache = {}
 
-export function cache(name: string, ttl: number = 1, debug: boolean = false) {
+export default function cache(name: string, ttl: number = 1, debug: boolean = false) {
     return function (
         target: any,
         propertyKey: string | symbol,

@@ -1,186 +1,93 @@
-import Builder from 'utils/creeps/Builder'
-import { TargetManager, TargetType } from 'utils/creeps/creep_memory'
-import { JOB, ROLE } from 'utils/creeps/CreepBaseClass'
-import Harvester from 'utils/creeps/Harvester'
-import Mule from 'utils/creeps/Mule'
-import Upgrader from 'utils/creeps/Upgrader'
-import RoomManager from 'utils/room_manager'
-import { TravelerMemory } from 'utils/Traveler'
-import utils from 'utils/utils'
+import CreepManager from 'creep_manager'
+import RoomManager from 'room_manager'
 
-declare global {
-  // Memory extension samples
-  interface Memory {
-    uuid: number
-    log: any
-    cache: {
-      [key: string]: {
-        key: string
-        value: any
-        ids?: string[]
-        serialized: boolean
-        expires: number
-        computedAt: number
-        cpuUsed: number
-      }
-    }
-  }
-
-  interface RoomMemory {
-    avoid?: boolean
-    spawn_next?: number
-  }
-
-  interface CreepMemory {
-    role: ROLE
-    room: string
-
-    job?: JOB
-
-    target?: Id<_HasId>
-
-    target_time?: number
-    last_target?: Id<_HasId>
-
-    work?: ScreepsReturnCode | CreepActionReturnCode | -100
-    move?: ScreepsReturnCode | -100
-    transfer?: ScreepsReturnCode | -100
-    pickup?: ScreepsReturnCode | -100
-
-    _travel?: TravelerMemory
-    _move?: any
-
-    _targets?: TargetType[]
-    _lastTarget?: TargetType
-  }
-
-  interface Creep {
-    _targets: TargetManager
-  }
-
-  // Syntax for adding proprties to `global` (ex "global.log")
-  namespace NodeJS {
-    interface Global {
-      log: any
-    }
-  }
-
-  type CreateSetup = {
-    [key in ROLE]: {
-      body: BodyPartConstant[],
-      max: number
-    }
-  }
+// extend Room prototype
+if (!Room.prototype.manager) {
+	Object.defineProperty(Room.prototype, 'manager', {
+		get: function (): RoomManager {
+			if (!this._manager) {
+				this._manager = new RoomManager(this)
+			}
+			return this._manager
+		},
+	})
 }
 
-console.log(`---Global reset ${Game.time}`)
+// extend Creep prototype
+if (!Creep.prototype.manager) {
+	Object.defineProperty(Creep.prototype, 'manager', {
+		get: function (): CreepManager {
+			if (!this._manager) {
+				this._manager = new CreepManager(this)
+			}
+			return this._manager
+		},
+	})
+}
 
+// main game loop
 export const loop = () => {
-  // console.log(`Current game tick is ${Game.time}`)
+	// Automatically delete memory of missing creeps
+	for (const name in Memory.creeps) {
+		if (!(name in Game.creeps)) {
+			delete Memory.creeps[name]
+			continue
+		}
+	}
 
-  // Automatically delete memory of missing creeps
-  for (const name in Memory.creeps) {
-    if (!(name in Game.creeps)) {
-      delete Memory.creeps[name]
-    }
-  }
+	// get all rooms
+	const rooms = Object.values(Game.rooms)
 
-  if (Memory.cache) {
-    for (const key in Memory.cache) {
-      if (Memory.cache[key].expires < Game.time) {
-        delete Memory.cache[key]
-      }
-    }
-  }
+	// loop all rooms
+	rooms.forEach(room => {
+		room.manager.run()
+	})
 
-  const myCreeps: Array<Harvester | Builder | Mule> = []
+	// loop my creeps
+	const creeps = Object.values(Game.creeps)
 
-  // loop my creeps
-  for (const name in Game.creeps) {
-    const creep = Game.creeps[name]
+	// setup tasks for creeps
+	creeps.forEach(creep => {
+		// load creep manager to assign tasks
+		if (!creep.manager) console.log('creep manager not found', creep.name)
 
-    // if not my creep, skip
-    if (!creep.my) {
-      continue
-    }
+		// clear out empty travels
+		if (!creep.memory._travel || !creep.memory._travel.path.length) {
+			delete creep.memory._travel
+		}
+	})
 
-    if (creep.memory.role === ROLE.harvester) {
-      myCreeps.push(new Harvester(creep))
-    } else if (creep.memory.role === ROLE.mule) {
-      myCreeps.push(new Mule(creep))
-    } else if (creep.memory.role === ROLE.builder) {
-      myCreeps.push(new Builder(creep))
-    } else if (creep.memory.role === ROLE.upgrader) {
-      myCreeps.push(new Upgrader(creep))
-    }
-  }
-
-  // run my creeps
-  for (const creep of myCreeps) {
-    // console.log('creep:', creep.creep.name, 'role:', creep.role, 'task:', creep.job, 'target:', creep.target)
-    creep.run()
-  }
+	// execute tasks for all creeps
+	creeps.forEach(creep => {
+		creep.manager.executeTasks()
+	})
 
 
-  // loop each room
-  for (const room_name in Game.rooms) {
-    const room = Game.rooms[room_name]
 
-    // is room mine?
-    if (room.controller?.my) {
-      const roomManager = new RoomManager(room)
-      roomManager.run()
 
-      if (Game.time % 10 === 0) {
-        const controllerLevel = room.controller.level + (room.controller.progress / room.controller.progressTotal)
-        console.log(`Room ${room.name} level: ${controllerLevel.toFixed(2)}`)
-      }
-    }
 
-    // find all dropped resources
-    const dropped_resources = room.find(FIND_DROPPED_RESOURCES)
-    const tombstones = room.find(FIND_TOMBSTONES, {
-      filter: ({ store }) => store.getUsedCapacity(RESOURCE_ENERGY) > 0
-    })
 
-    // find all creeps
-    const creeps = utils.creeps({ room: room.name })
+	// end of tick extra tasks
+	creeps.filter(creep => creep.memory.role === 'harvester')
+		.forEach(creep => {
+			// harvester transfer whatever energy we can to another creep with less free capacity to top them off
+			if (creep.memory.role === 'harvester' && !creep.manager.completed.has('transfer') && creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
+				// other creeps nearby with less free capacity
+				const nearBy = creeps.filter(c =>
+					c.store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
+					c.store.getFreeCapacity(RESOURCE_ENERGY) < creep.store.getFreeCapacity(RESOURCE_ENERGY) &&
+					c.pos.isNearTo(creep)
+				)
 
-    // loop dropped resources
-    for (const dropped_resource of [...tombstones, ...dropped_resources]) {
-      // if resource is gone, break
-      if (dropped_resource instanceof Resource && dropped_resource.amount === 0) {
-        continue
-      } else if (dropped_resource instanceof Tombstone && dropped_resource.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
-        continue
-      }
+				if (nearBy.length > 0) {
+					const transfer = creep.transfer(nearBy[0], RESOURCE_ENERGY)
+					if (transfer === OK) {
+						creep.manager.completed.add('transfer')
+					}
+				}
+			}
+		})
 
-      // loop creeps
-      for (const creep of creeps) {
-        // if not my creep, skip
-        if (!creep.my) {
-          continue
-        }
 
-        // if creep is full, skip
-        if (creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
-          continue
-        }
 
-        // if creep is too far away, skip
-        if (!creep.pos.isNearTo(dropped_resource)) {
-          continue
-        }
-
-        // pickup dropped resource
-        if (dropped_resource instanceof Resource) {
-          creep.pickup(dropped_resource)
-        } else if (dropped_resource instanceof Tombstone) {
-          creep.withdraw(dropped_resource, RESOURCE_ENERGY)
-        }
-      }
-    }
-  }
 }
-
-// Game.spawns.Spawn1.spawnCreep([WORK, WORK, WORK, CARRY], "U3", { memory: { role: "upgrader", room: "W27528" } })
