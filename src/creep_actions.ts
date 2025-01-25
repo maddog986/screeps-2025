@@ -29,6 +29,14 @@ const creepActions: Record<string, (base: CreepManager, target: TargetTypes | Ro
 
         const result = creep.harvest(target)
 
+        // how many work parts?
+        const workParts = creep.body.filter(part => part.type === WORK).length
+        const energyPerTick = workParts * HARVEST_POWER
+
+        if (energyPerTick >= creep.store.getFreeCapacity(RESOURCE_ENERGY)) {
+            return { success: OK, actions: { work: result } }
+        }
+
         if (!params.ignoreCapacity && creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
             return { success: OK }
         }
@@ -75,6 +83,14 @@ const creepActions: Record<string, (base: CreepManager, target: TargetTypes | Ro
         const result = creep.upgradeController(target)
 
         if (result === ERR_NOT_ENOUGH_RESOURCES || creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+            return { success: OK, actions: { work: result } }
+        }
+
+        // how many work parts?
+        const workParts = creep.body.filter(part => part.type === WORK).length
+        const energyPerTick = workParts * HARVEST_POWER
+
+        if (energyPerTick >= creep.store.getUsedCapacity(RESOURCE_ENERGY)) {
             return { success: OK, actions: { work: result } }
         }
 

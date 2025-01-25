@@ -27,6 +27,8 @@ if (!Creep.prototype.manager) {
 
 // main game loop
 export const loop = () => {
+	console.log('---------------------------------------')
+
 	// Automatically delete memory of missing creeps
 	for (const name in Memory.creeps) {
 		if (!(name in Game.creeps)) {
@@ -44,7 +46,7 @@ export const loop = () => {
 	})
 
 	// loop my creeps
-	const creeps = Object.values(Game.creeps)
+	const creeps = Object.values(Game.creeps).filter(c => c.my && !c.spawning)
 
 	// setup tasks for creeps
 	creeps.forEach(creep => {
@@ -60,6 +62,7 @@ export const loop = () => {
 	// execute tasks for all creeps
 	creeps.forEach(creep => {
 		creep.manager.executeTasks()
+		creep.manager.flushLogs()
 	})
 
 
@@ -87,7 +90,4 @@ export const loop = () => {
 				}
 			}
 		})
-
-
-
 }

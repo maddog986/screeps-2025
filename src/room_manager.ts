@@ -1,7 +1,7 @@
 import { CONFIG } from 'config'
 import Traveler from 'creep_traveler'
 import './utils/debugger'
-import Debugger from './utils/debugger'
+import Debuggable from './utils/debugger'
 
 declare global {
     interface CreepMemory {
@@ -14,7 +14,7 @@ declare global {
     }
 }
 
-export default class RoomManager extends Debugger {
+export default class RoomManager extends Debuggable {
     room: Room
     spawns: StructureSpawn[]
     creeps: Creep[]

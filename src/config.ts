@@ -44,7 +44,7 @@ interface Config {
 export const CONFIG: Config = {
     visuals: {                                  // visuals
         enabled: true,                         // enable/disable visuals
-        show_matrix: false,                      // show pathfinding matrix
+        show_matrix: true,                      // show pathfinding matrix
         creep_travel: true,                      // show creep paths
     },
 
@@ -59,12 +59,12 @@ export const CONFIG: Config = {
                     body: [                     // body parts
                         WORK, CARRY, MOVE, MOVE
                     ],
-                    max: 12,                     // max number of creeps
+                    max: 6,                     // max number of creeps
                     tasks: [                    // tasks
                         // refill spawn
                         {
-                            condition: "!freeCapacity(creep) && freeCapacity(closestSpawn) > 0 && notOverAssigned(closestSpawn, 'transfer')",        // creep is full and spawn has free capacity
-                            validate: "freeCapacity(target) > 0 && usedCapacity(creep) > 0",      // Ensure the spawn still has free capacity
+                            condition: "usedCapacity(creep) && spawns().filter(freeCapacity).filter(notOverAssigned).length > 0",        // creep is full and spawn has free capacity
+                            validate: "usedCapacity(creep) && freeCapacity(target)",      // Ensure the spawn still has free capacity
                             task: {
                                 type: "transfer",
                                 target: "closestSpawn"
@@ -72,8 +72,8 @@ export const CONFIG: Config = {
                         },
                         // harvest source
                         {
-                            condition: "freeCapacity(creep) > 0",                                       // creep has free capacity
-                            validate: "target.energy > 0 && freeCapacity(creep) > 0",            // Ensure the source still has energy
+                            condition: "freeCapacity(creep) > 0",             // creep has free capacity
+                            validate: "target.energy > 0 && freeCapacity(creep) && notOverAssignedSource(target)",    // Ensure the source still has energy
                             task: {
                                 "type": "harvest",
                                 "target": "closestSource"
@@ -81,8 +81,8 @@ export const CONFIG: Config = {
                         },
                         // upgrade room controller
                         {
-                            condition: "!freeCapacity(creep) && !freeCapacity(closestSpawn)",           // creep is full and spawn is full
-                            validate: "usedCapacity(creep) > 0 && freeCapacity(closestSpawn) === 0",    // Ensure the spawn is full
+                            condition: "usedCapacity(creep) && !freeCapacity(closestSpawn)",    // creep is full and spawn is full
+                            validate: "usedCapacity(creep) && spawns().filter(freeCapacity).filter(notOverAssigned).length === 0",    // Ensure the spawn is full
                             task: {
                                 "type": "upgrade",
                                 "target": "controller"
