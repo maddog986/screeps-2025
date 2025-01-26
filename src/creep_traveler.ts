@@ -71,14 +71,14 @@ export default class Traveler extends Debuggable {
     }
 
     static move(creep: Creep, target: RoomPosition, options: TravelerOptions = {}): ScreepsReturnCode {
-        const logger = new Debuggable(true, `Traveler[${creep.name}]`)
+        const logger = creep.manager ? creep.manager : new Debuggable(`Traveler[${creep.name}]`)
 
         // if creep is tired, do nothing
         if (creep.fatigue > 0 || creep.spawning) {
             // draw circle around creep
             if (CONFIG.visuals && CONFIG.visuals.creep_travel && !creep.spawning) {
                 creep.room.visual.circle(creep.pos, { fill: 'transparent', radius: 0.50, stroke: 'yellow' })
-                logger.debug(`[${creep.name}] is tired.`)
+                logger.log(`**Traveler** [${creep.name}] is tired.`)
             }
             return ERR_TIRED
         }
@@ -94,17 +94,17 @@ export default class Traveler extends Debuggable {
                 path: ''
             }
 
-            logger.debug(`[${creep.name}] initialized travel memory.`, creep.memory._travel)
+            logger.log(`**Traveler** [${creep.name}] initialized travel memory.`, creep.memory._travel)
         }
         // Check if creep is stuck
         else if (creep.pos.isEqualTo(Traveler.objectToPosition(creep.memory._travel.lastPos))) {
             creep.memory._travel.stuck += 1
 
-            logger.debug(`[${creep.name}] is stuck.`, creep.memory._travel)
+            logger.log(`**Traveler** [${creep.name}] is stuck.`, creep.memory._travel)
         }
         // Reset stuck counter and check if path is blocked at the end by a parked creep
         else {
-            logger.debug(`[${creep.name}] resuming travel. memory:`, creep.memory._travel)
+            logger.log(`**Traveler** [${creep.name}] resuming travel. memory:`, creep.memory._travel)
 
             creep.memory._travel.stuck = 0
 
@@ -119,14 +119,14 @@ export default class Traveler extends Debuggable {
             if (creeps.length) {
                 options.useCache = false
 
-                logger.debug(`[${creep.name}] path is blocked by a parked creep.`, creeps)
+                logger.log(`**Traveler** [${creep.name}] path is blocked by a parked creep.`, creeps)
             }
         }
 
         // default options
         const { useCache = true, range = 1, ignoreCreeps = false, stuckThreshold = 4, ...defaultOptions } = options
 
-        logger.debug(`[${creep.name}] moving to target position: ${JSON.stringify(creep.memory._travel.target)}.`, options)
+        logger.log(`**Traveler** [${creep.name}] moving to target position: ${JSON.stringify(creep.memory._travel.target)}.`, options)
 
         // find path to target
         if (!useCache || !creep.memory._travel.path.length || creep.memory._travel.stuck > stuckThreshold) {
@@ -156,13 +156,12 @@ export default class Traveler extends Debuggable {
             // blue circle around creep
             if (CONFIG.visuals && CONFIG.visuals.creep_travel) creep.room.visual.circle(creep.pos, { fill: 'transparent', radius: 0.50, stroke: 'blue' })
 
-            logger.debug(`[${creep.name}] generated new path.`, creep.memory._travel)
+            logger.log(`**Traveler** [${creep.name}] generated new path.`, creep.memory._travel)
         }
 
         // path finding failed
         if (creep.memory._travel.path.length === 0) {
-            logger.debug(`[${creep.name}] path finding failed.`, creep.memory._travel)
-            logger.flushLogs()
+            logger.log(`**Traveler** [${creep.name}] path finding failed.`, creep.memory._travel)
 
             delete creep.memory._travel
             return ERR_NO_PATH
@@ -228,12 +227,11 @@ export default class Traveler extends Debuggable {
             creep.memory._travel.lastPos = Traveler.positionToObject(creep.pos)     // set last position
             creep.memory._travel.distance = creep.memory._travel.path.length        // acutal path distance to target
 
-            logger.debug(`[${creep.name}] moved from ${creep.pos} to ${nextPosition}.`, creep.memory._travel)
+            logger.log(`**Traveler** [${creep.name}] moved from ${creep.pos} to ${nextPosition}.`, creep.memory._travel)
         }
         // check if creep is tired
         else if (moveResult === ERR_TIRED) {
-            logger.debug(`[${creep.name}] is tired after move.`, creep.memory._travel)
-            logger.flushLogs()
+            logger.log(`**Traveler** [${creep.name}] is tired after move.`, creep.memory._travel)
 
             // just needs a minute
             return moveResult
@@ -241,8 +239,7 @@ export default class Traveler extends Debuggable {
 
         // check if creep is stuck
         if (creep.memory._travel.stuck > stuckThreshold) {
-            logger.debug(`[${creep.name}] is stuck after move.`, creep.memory._travel)
-            logger.flushLogs()
+            logger.log(`**Traveler** [${creep.name}] is stuck after move.`, creep.memory._travel)
 
             creep.say('Stuck!')
 
@@ -254,8 +251,6 @@ export default class Traveler extends Debuggable {
             // we stuck, so no path
             return ERR_NO_PATH
         }
-
-        logger.flushLogs()
 
         // movement result
         return moveResult
@@ -438,6 +433,11 @@ export default class Traveler extends Debuggable {
                     // parked creep
                     if (!creep.memory._travel || creep.memory._travel.path.length === 0 || creep.memory._travel.distance === 0) {
                         costMatrix.set(x, y, 255)
+                    } else if (creep.memory._travel && creep.memory._travel.target) {
+                        const targetPosition = this.objectToPosition(creep.memory._travel.target)
+
+                        // creeps end point, try to avoid
+                        costMatrix.set(targetPosition.x, targetPosition.y, cost + Math.ceil(highCost * 2.5))
                     }
                 })
         }

@@ -1,8 +1,16 @@
+declare global {
+    type DebugLevel = 'basic' | 'detailed' | 'informative'
+}
+
+const LEVEL_HIERARCHY: Record<DebugLevel, number> = {
+    basic: 1,
+    detailed: 2,
+    informative: 3,
+}
+
 export default class Debuggable {
-    private debugEnabled: boolean = false;
     private debugPrefix: string = '';
-    private debugLevel: 'basic' | 'informative' | 'detailed' = 'basic';
-    private logs: { level: 'basic' | 'informative' | 'detailed'; messages: any[] }[] = [];
+    private logs: { level: DebugLevel; messages: any[] }[] = [];
 
     /**
      * Constructs the Debuggable instance with initial settings.
@@ -10,28 +18,23 @@ export default class Debuggable {
      * @param debugPrefix - Prefix for debug messages (e.g., class name or context).
      * @param debugLevel - Debug level ('basic', 'informative', 'detailed').
      */
-    constructor(debugEnabled: boolean = false, debugPrefix: string = '', debugLevel: 'basic' | 'informative' | 'detailed' = 'detailed') {
-        this.debugEnabled = debugEnabled
-        this.debugPrefix = debugPrefix
-        this.debugLevel = debugLevel
+    constructor(debugPrefix: string = '') {
+        this.debugPrefix = `${this.constructor.name}[${debugPrefix}]`
     }
 
     /**
      * Logs a debug message if debugging is enabled and meets the debug level requirement.
      * @param args - Any number of arguments to log, with an optional debug level as the last argument.
      */
-    public debug(...args: any[]): void {
-        if (!this.debugEnabled) return
-
-        const levels: ('basic' | 'informative' | 'detailed')[] = ['basic', 'informative', 'detailed']
+    public log(...args: any[]): void {
+        const levels: DebugLevel[] = ['basic', 'informative', 'detailed']
 
         // Extract the level if the last argument is a valid level, default to 'basic'.
-        let level: 'basic' | 'informative' | 'detailed' = 'basic'
-        if (typeof args[args.length - 1] === 'string' && levels.includes(args[args.length - 1] as any)) {
-            level = args.pop() as 'basic' | 'informative' | 'detailed'
-        }
+        let level: DebugLevel = 'basic'
 
-        if (levels.indexOf(level) > levels.indexOf(this.debugLevel)) return
+        if (typeof args[args.length - 1] === 'string' && levels.includes(args[args.length - 1] as any)) {
+            level = args.pop() as DebugLevel
+        }
 
         // Store the logs for later display.
         this.logs.push({ level, messages: args })
@@ -41,25 +44,29 @@ export default class Debuggable {
      * Displays all logs for the current instance as a single formatted HTML block with markdown, filtered by a specified level.
      * @param flushLevel - The level to flush logs for ('basic', 'informative', 'detailed').
      */
-    public flushLogs(flushLevel: 'basic' | 'informative' | 'detailed' = 'detailed'): void {
-        if (!this.debugEnabled || this.logs.length === 0) return
-
-        const levelHierarchy: Record<'basic' | 'informative' | 'detailed', number> = {
-            basic: 1,
-            detailed: 2,
-            informative: 3,
-        }
+    public flushLogs(flushLevel: DebugLevel = 'detailed'): void {
+        if (this.logs.length === 0) return
 
         let output = `<details>` +
             `<summary style='color:white;margin:0;'>[${Game.time}] <strong>${this.debugPrefix} </strong>:</summary>` +
-            `<div style='display:flex;flex-direction:column;gap:8px;margin-top:4px;'>`
+            `<div style='display:flex;flex-direction:column;gap:8px;padding:4px 0;'>`
 
         this.logs
-            .filter(({ level }) => levelHierarchy[level] <= levelHierarchy[flushLevel])
+            .filter(({ level }) => LEVEL_HIERARCHY[level] <= LEVEL_HIERARCHY[flushLevel])
             .forEach(({ level, messages }) => {
                 messages.forEach(message => {
                     if (typeof message === 'object') {
-                        output += `<pre style='background:black;padding:2px;border:0;border-radius:3px;color:#d3b886;min-width:500px;margin:0;line-height:1;'><code>${JSON.stringify(message, null, 2)}</code></pre>`
+
+                        output += `<pre style='overflow:auto;max-height:100px;background:black;padding:2px;border:0;border-radius:3px;color:#d3b886;min-width:500px;margin:0;line-height:1;'><code>` +
+                            JSON.stringify(message, null, 2)
+                                .replace(/"([^"]+)":/g, '<span style="color:rgb(252 104 104);">"$1"</span>:') // Keys in red
+                                .replace(/:\s*"([^"]+)"/g, ': <span style="color:rgb(156, 211, 159);">"$1"</span>') // String values in green
+                                .replace(/:\s*(\d+)/g, ': <span style="color:rgb(139, 178, 218);">$1</span>') // Numbers in blue
+                                .replace(/:\s*(true|false)/g, ': <span style="color:rgb(255, 188, 87);">$1</span>') // Booleans in orange
+                                .replace(/:\s*null/g, ': <span style="color: #9e9e9e;">null</span>') // Null in gray
+                            +
+                            `</code></pre>`
+
                     } else if (typeof message === 'string') {
                         // Convert markdown-style text to HTML.
                         const formattedMessage = message
@@ -86,29 +93,5 @@ export default class Debuggable {
 
         // Clear the logs after flushing.
         this.logs = []
-    }
-
-    /**
-     * Enables or disables debugging.
-     * @param enabled - Whether debugging should be enabled.
-     */
-    public setDebug(enabled: boolean): void {
-        this.debugEnabled = enabled
-    }
-
-    /**
-     * Updates the prefix for debug messages.
-     * @param prefix - The new debug prefix.
-     */
-    public setDebugPrefix(prefix: string): void {
-        this.debugPrefix = prefix
-    }
-
-    /**
-     * Sets the debug level.
-     * @param level - The new debug level ('basic', 'informative', 'detailed').
-     */
-    public setDebugLevel(level: 'basic' | 'informative' | 'detailed'): void {
-        this.debugLevel = level
     }
 }
