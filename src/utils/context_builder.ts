@@ -2,69 +2,91 @@ import Debuggable from './debugger'
 import utils from './utils'
 
 export default class ContextBuilder extends Debuggable {
-    room: Room | undefined
-    baseContext: Record<string, any>
-    proxy: any
+    room: Room
+    memoizationCache: Record<string, any>
+    proxy: Record<string, any>
 
-    constructor(room: Room | undefined = undefined) {
-        super('ContextBuilder')
-
+    constructor(room: Room, prefix: string) {
+        super(prefix)
         this.room = room
+        this.memoizationCache = {} // Cache storage
 
         // Base context definitions
-        this.baseContext = {
-
-            // base constants
+        const baseContext: Record<string, any> = {
+            // Base constants
             RESOURCE_ENERGY: RESOURCE_ENERGY,
 
             room: room,
             controller: this.room?.controller,
 
-            // find functions
+            // Find functions
             creeps: () => room?.find(FIND_MY_CREEPS),
             enemies: () => room?.find(FIND_HOSTILE_CREEPS),
             spawns: () => room?.find(FIND_MY_SPAWNS),
             activeSources: () => room?.find(FIND_SOURCES_ACTIVE),
             sources: () => room?.find(FIND_SOURCES),
             constructionSites: () => room?.find(FIND_CONSTRUCTION_SITES),
-            controllerLevel: () => room && room.controller && (room?.controller?.level + (room?.controller.progress / room.controller.progressTotal)),
+            controllerLevel: () =>
+                room?.controller
+                    ? room.controller.level +
+                    room.controller.progress / room.controller.progressTotal
+                    : undefined,
             structures: () => room?.find(FIND_STRUCTURES),
-            containers: () => room?.find(FIND_STRUCTURES, {
-                filter: (s) => s.structureType === STRUCTURE_CONTAINER
-            }),
+            containers: () =>
+                room?.find(FIND_STRUCTURES, {
+                    filter: (s) => s.structureType === STRUCTURE_CONTAINER,
+                }),
 
-            // helper functions
+            // Helper functions
+            assignedCreeps: this.assignedCreeps.bind(this),
             freeCapacity: this.getFreeCapacity.bind(this),
             usedCapacity: this.getUsedCapacity.bind(this),
             notOverAssignedSource: this.isNotOverAssignedSource.bind(this),
             notOverAssigned: this.isNotOverAssigned.bind(this),
+            walkablePositions: this.walkablePositions.bind(this),
+            creepsByRole: this.creepsByRole.bind(this),
         }
 
-        const context: Record<string, any> = {}
+        // Memoize all functions in the base context
+        for (const key in baseContext) {
+            if (typeof baseContext[key] === 'function') {
+                baseContext[key] = this.memoize(baseContext[key])
+            }
+        }
 
-        Object.keys(this.baseContext).forEach(key => (context[key] = undefined))
-
-        // Use a Proxy for lazy evaluation of context properties
-        this.proxy = new Proxy(context, {
+        // Use Proxy for lazy evaluation of context properties
+        this.proxy = new Proxy(baseContext, {
             get: (target: any, prop: string) => {
-                if (target[prop] === undefined) {
-                    // Evaluate the function dynamically
-                    return this.baseContext[prop]
+                if (prop in target) {
+                    return target[prop] // need to return values and functions as-is
                 }
-                return target[prop]
+                return undefined
             },
             set: (target: any, prop: string, value: any) => {
                 target[prop] = value
                 return true
-            }
+            },
         })
     }
 
-    keys() {
+    memoize(fn: Function): (...args: any[]) => any {
+        return (...args: any[]) => {
+            const key = `${Game.time}-${fn.name}-${JSON.stringify(args)}`
+            if (this.memoizationCache[key] === undefined) {
+                console.log(`[${Game.time}]**memoize:** saved: ${fn.name}(${args})`)
+                this.memoizationCache[key] = fn(...args)
+            } else {
+                console.log(`[${Game.time}]**memoize:** used: ${fn.name}(${args})`)
+            }
+            return this.memoizationCache[key]
+        }
+    }
+
+    contextKeys() {
         return Object.keys(this.proxy)
     }
 
-    values() {
+    contextValues() {
         return Object.values(this.proxy)
     }
 
@@ -73,26 +95,19 @@ export default class ContextBuilder extends Debuggable {
     }
 
     getContext(key: string): any {
-        // TODO: cache this?
-        return typeof this.proxy[key] === 'function' ? this.proxy[key].bind(this)() : this.proxy[key]
+        return typeof this.proxy[key] === 'function' ? this.proxy[key]() : this.proxy[key]
     }
 
     evaluateExpression(expression: string): any {
-        return new Function(...this.keys(), `return ${expression};`).bind(this)(...this.values())
+        console.log('evaluateExpression:', expression)
+        // Object.keys(this.proxy).forEach((key) => {
+        //     console.log(`<strong>key:</strong> ${key} <strong>value:</strong> ${this.proxy[key]}`)
+        // })
+        return new Function(...this.contextKeys(), `return ${expression};`).bind(this)(...this.contextValues())
     }
 
     getFreeCapacity(target: TargetTypes & { store: StoreDefinition } | TargetTypes & { energy: number, energyCapacity: number } | undefined): number {
-        console.log('target:', target)
-
         if (!target) return 0
-
-        // if (target instanceof Creep) {
-        //     return target.getRealTimeFreeCapacity(RESOURCE_ENERGY)
-        // }
-
-        // if (target instanceof StructureSpawn) {
-        //     return target.getRealTimeFreeCapacity()
-        // }
 
         if ('energy' in target && 'energyCapacity' in target) {
             return target.energyCapacity - target.energy
@@ -104,13 +119,6 @@ export default class ContextBuilder extends Debuggable {
     getUsedCapacity(target: { store: StoreDefinition } | { energy: number, energyCapacity: number } | undefined): number {
         if (!target) return 0
 
-        // if (target instanceof Creep) {
-        //     return target.getRealTimeUsedCapacity(RESOURCE_ENERGY)
-        // }
-        // if (target instanceof StructureSpawn) {
-        //     return target.getRealTimeUsedCapacity()
-        // }
-
         if ('store' in target) {
             return target.store.getUsedCapacity(RESOURCE_ENERGY)
         }
@@ -119,47 +127,65 @@ export default class ContextBuilder extends Debuggable {
     }
 
     isNotOverAssignedSource(target: TargetTypes | undefined): boolean {
-        // Your existing implementation for notOverAssignedSource
         if (!target) return false
 
-        const creepContext = this.getContext('creep')
-
-        const assigned_creeps = Object.values(Game.creeps)
-            .filter(creep =>
-                (!creepContext || creep.id !== creepContext.id) &&
-                creep.memory.tasks &&
-                creep.memory.tasks.some(task => 'id' in task && task.id === target.id && task.action === 'harvest') &&
-                (!creepContext || creep.pos.getRangeTo(target) < creepContext.pos.getRangeTo(target))
-            )
-
-        const walkablePositions = utils.walkablePositions(target.pos)
+        const assigned_creeps = this.assignedCreeps(target, 'harvest')
+        const walkablePositions = this.walkablePositions(target)
         const assignedCreepsEnergy = assigned_creeps.reduce((total, c) => total + this.getUsedCapacity(c), 0)
         const stored = this.getUsedCapacity(target as any)
 
-        this.log(`**notOverAssignedSource** target: ${target} creep: ${creepContext} room: ${this.room} assigned_creeps: ${assigned_creeps.length} walkablePositions: ${walkablePositions} assignedCreepsEnergy: ${assignedCreepsEnergy} stored: ${stored}`, 'informative')
+        this.log(
+            `**notOverAssignedSource** target: ${target} room: ${this.room} assigned_creeps: ${assigned_creeps.length} walkablePositions: ${walkablePositions} assignedCreepsEnergy: ${assignedCreepsEnergy} stored: ${stored}`,
+            'informative'
+        )
 
         return walkablePositions > assigned_creeps.length && stored > assignedCreepsEnergy
     }
 
     isNotOverAssigned(target: TargetTypes | undefined): boolean {
-        // Your existing implementation for notOverAssigned
         if (!target) return false
 
+        const free_energy = this.getFreeCapacity(target as any)
+        if (free_energy === 0) return false
+
+        const walkablePositions = this.walkablePositions(target)
+        if (walkablePositions === 0) return false
+
+        const assigned_creeps = this.assignedCreeps(target, 'transfer')
+        if (assigned_creeps.length === 0) return true
+
+        const assignedCreepsEnergy = assigned_creeps.reduce((total, c) => total + this.getFreeCapacity(c), 0)
+
+        this.log(
+            `**notOverAssigned** target: ${target} room: ${this.room} assigned_creeps: ${assigned_creeps.length} walkablePositions: ${walkablePositions} assignedCreepsEnergy: ${assignedCreepsEnergy} stored: ${free_energy}`,
+            'informative'
+        )
+
+        return walkablePositions > assigned_creeps.length && free_energy > assignedCreepsEnergy
+    }
+
+    assignedCreeps(target: TargetTypes | undefined, action: string | undefined = undefined): Creep[] {
+        if (!target) return []
+
         const creepContext = this.getContext('creep')
+        const creeps: Creep[] = this.getContext('creeps')
 
-        const assigned_creeps = Object.values(Game.creeps)
-            .filter(creep =>
+        return creeps.filter(
+            (creep) =>
                 creep.memory.tasks &&
-                creep.memory.tasks.some(task => 'id' in task && task.id === target.id && task.action === 'transfer') &&
-                (!creepContext || (creep.id !== creepContext.id && creep.pos.getRangeTo(target) < creepContext.pos.getRangeTo(target)))
-            )
+                creep.memory.tasks.some(
+                    (task) => 'id' in task && task.id === target.id && (!action || task.action === action)
+                ) &&
+                (!creepContext || creep.id !== creepContext.id && creep.pos.getRangeTo(target) <= creepContext.pos.getRangeTo(target))
+        )
+    }
 
-        const walkablePositions = utils.walkablePositions(target.pos)
-        const assignedCreepsEnergy = assigned_creeps.reduce((total, c) => total + this.getUsedCapacity(c), 0)
-        const stored = this.getFreeCapacity(target as any)
+    walkablePositions(target: TargetTypes | undefined): number {
+        if (!target) return 0
+        return utils.walkablePositions(target.pos)
+    }
 
-        this.log(`**notOverAssigned** target: ${target} creep: ${creepContext} room: ${this.room} assigned_creeps: ${assigned_creeps.length} walkablePositions: ${walkablePositions} assignedCreepsEnergy: ${assignedCreepsEnergy} stored: ${stored}`, 'informative')
-
-        return walkablePositions > assigned_creeps.length && stored > assignedCreepsEnergy
+    creepsByRole(role: string): Creep[] {
+        return this.getContext('creeps').filter((creep: Creep) => creep.memory.role === role)
     }
 }

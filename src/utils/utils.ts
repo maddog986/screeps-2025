@@ -148,4 +148,92 @@ export default class utils {
 
         return optimalPosition?.pos // Return the optimal position or undefined if none found
     }
+
+    static positionToObject(pos: RoomPosition): { x: number, y: number, roomName: string } {
+        return { x: pos.x, y: pos.y, roomName: pos.roomName }
+    }
+
+    static objectToPosition(obj: { x: number, y: number, roomName: string }): RoomPosition {
+        return new RoomPosition(obj.x, obj.y, obj.roomName)
+    }
+
+    // static findPath(creep: Creep, target: RoomPosition, options: TravelerOptions = {}): string {
+    //     const { range = 1, ignoreCreeps = false } = options
+    //     return creep.room.findPath(creep.pos, target, {
+    //         range,
+    //         ignoreCreeps,
+    //         ignoreRoads: true,
+    //         maxRooms: 1,
+    //         maxOps: 1000,
+    //         costCallback: (roomName, costMatrix) => this.buildRoomCostMatrix(roomName, costMatrix),
+    //     })
+    //         .map(step => step.direction)
+    //         .join('')
+    // }
+
+    static pathToDirections(path: RoomPosition[]): DirectionConstant[] {
+        const directions: DirectionConstant[] = []
+
+        for (let i = 0; i < path.length - 1; i++) {
+            const currentPos = path[i]
+            const nextPos = path[i + 1]
+            const direction = currentPos.getDirectionTo(nextPos)
+            directions.push(direction as DirectionConstant)
+        }
+
+        return directions
+    }
+
+    static directionsToPath(startPos: RoomPosition, directions: DirectionConstant[]): RoomPosition[] {
+        const path: RoomPosition[] = [startPos] // Start with the initial position
+        let currentPos = startPos
+
+        for (const direction of directions) {
+            const nextPos = this.getNextPosition(currentPos, direction)
+            path.push(nextPos)
+            currentPos = nextPos
+        }
+
+        return path
+    }
+
+    static getNextPosition(pos: RoomPosition, direction: DirectionConstant): RoomPosition {
+        let { x, y } = pos
+        const roomName = pos.roomName
+
+        // Adjust x and y based on the direction
+        switch (direction) {
+            case TOP:
+                y -= 1
+                break
+            case TOP_RIGHT:
+                y -= 1
+                x += 1
+                break
+            case RIGHT:
+                x += 1
+                break
+            case BOTTOM_RIGHT:
+                y += 1
+                x += 1
+                break
+            case BOTTOM:
+                y += 1
+                break
+            case BOTTOM_LEFT:
+                y += 1
+                x -= 1
+                break
+            case LEFT:
+                x -= 1
+                break
+            case TOP_LEFT:
+                y -= 1
+                x -= 1
+                break
+        }
+
+        return new RoomPosition(x, y, roomName)
+    }
+
 }

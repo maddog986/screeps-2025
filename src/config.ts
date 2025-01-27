@@ -1,5 +1,6 @@
 declare global {
     interface RoomConfig {
+        spawnDelay: number
         creeps: {
             [key: string]: CreepRoleConfig
         },
@@ -47,17 +48,18 @@ interface Config {
 
 export const CONFIG: Config = {
     visuals: {                                 // visuals
-        enabled: false,                         // enable/disable visuals
-        show_matrix: false,                    // show pathfinding matrix
+        enabled: true,                         // enable/disable visuals
+        show_matrix: true,                    // show pathfinding matrix
         creep_travel: true,                    // show creep paths
     },
 
     rooms: {
         sim: {                                  // room name
+            spawnDelay: 10,                     // ticks to delay between spawns
             creeps: {
                 harvester: {                    // role
-                    body: [WORK, CARRY, MOVE, MOVE],
-                    max: "sources().length",
+                    body: [WORK, CARRY, CARRY, MOVE, MOVE],
+                    max: "Math.max(1, sources().filter(notOverAssigned).reduce((a,b) => a + walkablePositions(b), 0) + (creeps().filter(c => usedCapacity(c) > 45).length * 2) - (creeps().filter(c => usedCapacity(c) < 20).length * 3))",        // max number of creeps
 
                     conditions: [
                         // "mules.length > 0",
@@ -69,11 +71,12 @@ export const CONFIG: Config = {
                         {
                             conditions: [
                                 "usedCapacity(creep)", // creep is full
+                                "notOverAssigned(target)" // Ensure the spawn is not over assigned
                                 //    "spawns().filter(freeCapacity).filter(notOverAssigned).length > 0" // spawn has free capacity
                             ],
                             validates: [
                                 "usedCapacity(creep)",
-                                "freeCapacity(target)" // Ensure the spawn still has free capacity
+                                "freeCapacity(target)", // Ensure the spawn still has free capacity
                             ],
                             task: {
                                 action: "transfer",
@@ -83,12 +86,13 @@ export const CONFIG: Config = {
                         // harvest source
                         {
                             conditions: [
-                                "freeCapacity(creep) > 0" // creep has free capacity
+                                "freeCapacity(creep) > 0", // creep has free capacity
+                                //"notOverAssignedSource(target)"
                             ],
                             validates: [
                                 "target.energy > 0", // Ensure the source still has energy
                                 "freeCapacity(creep)",
-                                //    "notOverAssignedSource(target)"
+                                // "notOverAssignedSource(target)"
                             ],
                             task: {
                                 action: "harvest",
@@ -103,7 +107,7 @@ export const CONFIG: Config = {
                             ],// creep is full and spawn is full
                             validates: [
                                 "usedCapacity(creep)",
-                                //    "spawns().filter(freeCapacity).filter(notOverAssigned).length === 0" // Ensure the spawn is full
+                                "spawns().filter(freeCapacity).filter(notOverAssigned).length === 0" // Ensure the spawn is full
                             ],
                             task: {
                                 action: "upgrade",

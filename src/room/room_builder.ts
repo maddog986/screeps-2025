@@ -1,9 +1,8 @@
 import { CONFIG } from 'config'
-import Traveler from 'creep_traveler'
-import RoomSpawnManager from 'room/room_spawn'
 import { STRUCTURE_KEY } from 'utils/RoomVisual.prototype'
 import cache from 'utils/cache'
 import utils from 'utils/utils'
+import RoomSpawnManager from './room_spawn'
 
 declare global {
     interface StructurePosition {
@@ -168,11 +167,7 @@ export default class RoomBuilder extends RoomSpawnManager {
                         maxOps: 5000,
                         maxRooms: 1,
                         costCallback: (roomName, costMatrix) => {
-                            costMatrix = Traveler.buildRoomCostMatrix(roomName, costMatrix, {
-                                swampCost: 15,
-                                plainCost: 15,
-                                ignoreCreeps: true
-                            })
+                            costMatrix = this.room.manager.matrix.clone()
 
                             for (const { x, y, structure } of buildable_structures) {
                                 if (structure === STRUCTURE_WALL) {
@@ -306,8 +301,7 @@ export default class RoomBuilder extends RoomSpawnManager {
         if (!CONFIG.visuals.enabled || !CONFIG.visuals.show_matrix) return
 
         // lets visualize the room matrix
-        const matrix = new PathFinder.CostMatrix
-        const room_matrix = Traveler.buildRoomCostMatrix(this.room.name, matrix)
+        const room_matrix = this.room.manager.matrix
 
         // loop through the matrix, display a number on each tile with its cost
         for (let y = 0; y < 50; y++) {
@@ -319,6 +313,5 @@ export default class RoomBuilder extends RoomSpawnManager {
                 })
             }
         }
-
     }
 }

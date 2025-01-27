@@ -1,4 +1,4 @@
-import CreepManager from 'creep_manager'
+import CreepManager from 'creep/creep_manager'
 
 const creepActions: Record<string, (base: CreepManager, target: TargetTypes | RoomPosition) => ActionResult> = {
     move: ({ creep, completed }, target) => {

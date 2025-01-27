@@ -1,6 +1,6 @@
 import { CONFIG } from 'config'
-import creepActions from 'creep_actions'
-import 'creep_traveler'
+import creepActions from 'creep/creep_actions'
+import 'creep/creep_traveler'
 import BaseClass from 'utils/base_class'
 
 declare global { // using global declaration to extend the existing types
@@ -53,54 +53,68 @@ export default class CreepManager extends BaseClass {
 
     constructor(creep: Creep) {
         // debugger
-        super(creep.room, creep.name, creep.room.manager.context)
+        super(creep.room, creep.name)
 
         this.creep = creep
         this.completed = new Set()
 
+        this.assignedTasks = CONFIG.rooms[this.creep.room.name]?.creeps[this.creep.memory.role]?.tasks || []
+
         // make sure tasks is set
         this.creep.memory.tasks ??= []
 
-        // set some extra context
-        this.setContext('creep', creep)
-
-        // creep functions
-        this.setContext('closestSpawn', () => creep.pos.findClosestByPath(FIND_MY_SPAWNS))
-        this.setContext('closestSource', () => creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE))
-        this.setContext('closestByPath', (type: FindConstant) => creep.pos.findClosestByPath(type))
-        this.setContext('closestByRange', (type: FindConstant) => creep.pos.findClosestByRange(type))
-
-        this.log(`**constructor:** context loaded:`, {
-            creep: this.creep.id,
+        this.log(`**constructor:** loaded data:`, {
+            tasks: this.assignedTasks.length,
+            context: {
+                creep: this.creep.id,
+            },
+            storage: this.creep.store,
         })
-
-        this.log('**constructor:** creep storage:', this.creep.store)
-
-        this.assignedTasks = CONFIG.rooms[this.creep.room.name]?.creeps[this.creep.memory.role]?.tasks || []
 
         // if not tasks found, find some
         if (this.creep.memory.tasks.length === 0) {
             this.processTasks()
         }
+
+        this.setupContext()
+    }
+
+    run() {
+        // clear out empty travels
+        if (this.creep.memory.travel) {
+            const { destination, lastPos } = this.creep.memory.travel
+
+            const targetPos = new RoomPosition(destination.x, destination.y, destination.roomName)
+            if (this.creep.pos.isEqualTo(targetPos)) {
+                this.log(`**traveler:** at target position. clearing data:`, this.creep.memory.travel)
+                delete this.creep.memory.travel
+            }
+        }
+
+        this.executeTasks()
+    }
+
+    setupContext() {
+        // set some extra context
+        this.setContext('creep', this.creep)
+        this.setContext('closestSpawn', () => this.creep.pos.findClosestByPath(FIND_MY_SPAWNS))
+        this.setContext('closestSource', () => this.creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE, {
+            filter: this.isNotOverAssignedSource.bind(this),
+        }))
+        this.setContext('closestByPath', (type: FindConstant) => this.creep.pos.findClosestByPath(type))
+        this.setContext('closestByRange', (type: FindConstant) => this.creep.pos.findClosestByRange(type))
     }
 
     private processTasks() {
-        this.log(`**constructor:** tasks assigned to creep role: ${this.assignedTasks.length}`)
+        // make sure context is setup
+        this.setupContext()
 
         // Iterate through the configuration to find a matching condition
         for (const assignedTask of this.assignedTasks) {
             this.log('**processTasks:** assigned task config:', assignedTask)
 
-            // check conditions
-            if (assignedTask.conditions && !assignedTask.conditions.every((cond: string) => this.context.evaluateExpression(cond))) {
-                this.log(`**processTasks:** #FFA2A2[**condition failed:**] conditions:`, assignedTask.conditions)
-                continue
-            }
-
-            this.log(`**processTasks:** #BCFFA2[**condition passed:**] conditions:`, assignedTask.conditions)
-
             // // Resolve the target dynamically
-            const resolvedTarget: TargetTypes | RoomPosition | undefined = this.getContext(assignedTask.task.target, true)
+            const resolvedTarget: TargetTypes | RoomPosition | undefined = this.getContext(assignedTask.task.target)
             if (!resolvedTarget) {
                 this.log(`**processTasks:** #FFA2A2[**target not found:**] target:`, assignedTask.task.target)
                 continue
@@ -108,11 +122,20 @@ export default class CreepManager extends BaseClass {
 
             // save target
             this.setContext('target', resolvedTarget)
+            this.setContext('creep', this.creep)
 
             this.log(`**processTasks:** resolvedTarget`, resolvedTarget)
 
+            // check conditions
+            if (assignedTask.conditions && !assignedTask.conditions.every((cond: string) => this.evaluateExpression(cond))) {
+                this.log(`**processTasks:** #FFA2A2[**condition failed:**] conditions:`, assignedTask.conditions)
+                continue
+            }
+
+            this.log(`**processTasks:** #BCFFA2[**condition passed:**] conditions:`, assignedTask.conditions)
+
             // check validates of the task
-            if (assignedTask.validates && !assignedTask.validates.every((cond: string) => this.context.evaluateExpression(cond))) {
+            if (assignedTask.validates && !assignedTask.validates.every((cond: string) => this.evaluateExpression(cond))) {
                 this.log(`**processTasks:** #FFA2A2[**validate failed:**] validates:`, assignedTask.validates)
                 continue
             }
@@ -182,8 +205,12 @@ export default class CreepManager extends BaseClass {
             return { success: OK }
         }
 
+        // make sure context is setup
+        this.setupContext()
+
         // set target in context
         this.setContext('target', target)
+        this.setContext('creep', this.creep)
 
         const taskConfig = this.assignedTasks.find(entry => entry.task.action === action)
 
@@ -192,7 +219,7 @@ export default class CreepManager extends BaseClass {
         if (taskConfig?.validates) {
             this.log(`**task revalidation.** Task[${taskConfig.task.action}]:`, taskConfig.task)
 
-            const conditionsMet = taskConfig.validates.every((cond: string) => this.context.evaluateExpression(cond))
+            const conditionsMet = taskConfig.validates.every((cond: string) => this.evaluateExpression(cond))
             if (conditionsMet) {
                 this.log(`**performAction:** #BCFFA2[**validation passed.**] validation:`, taskConfig.validates)
             } else {
@@ -220,15 +247,16 @@ export default class CreepManager extends BaseClass {
         return result
     }
 
-    executions = 0
-
     // execute all tasks in memory
     executeTasks(): void {
+        // make sure context is setup
+        this.setupContext()
+
         // get tasks from creep memory
         const tasks = [...this.creep.memory.tasks ?? []]
         if (tasks.length === 0) return
 
-        this.log(`**executeTasks:** all assigned to memory:`, tasks)
+        this.log(`**executeTasks:** all tasks assigned to memory:`, tasks)
 
         // loop through all tasks
         while (tasks.length > 0) {
@@ -286,13 +314,5 @@ export default class CreepManager extends BaseClass {
             })
 
         this.log('**executeTasks** completed actions:', Array.from(this.completed))
-
-        this.executions++
-
-        if (this.executions < 2 && this.creep.memory.tasks.length === 0) {
-            this.log('**executeTasks:** no tasks left. Re-evaluating tasks.')
-            this.processTasks()
-            this.executeTasks()
-        }
     }
 }

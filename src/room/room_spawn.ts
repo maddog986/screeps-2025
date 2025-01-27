@@ -1,10 +1,13 @@
 import { CONFIG } from 'config'
 import BaseClass from 'utils/base_class'
-import ContextBuilder from 'utils/context_builder'
 
 declare global {
     interface CreepMemory {
         role: string
+    }
+
+    interface RoomMemory {
+        next_spawn: number
     }
 }
 
@@ -32,12 +35,16 @@ export default class RoomSpawnManager extends BaseClass {
     }
 
     run() {
-        super.run()
-
         // continue if a spawn is not spawning
         if (this.spawns.every(spawn => spawn.spawning || spawn.store.energy < 200)) return
 
+        if (this.room.memory?.next_spawn > Game.time) {
+            return
+        }
+
         const roleConfig = this.allRolesConfig(this.room)
+        console.log('roleConfig:', JSON.stringify(roleConfig))
+
         this.log(`**Creep Loadouts** all creep loadouts:`, roleConfig)
 
         // loop through each spawn and spawn creeps
@@ -57,7 +64,12 @@ export default class RoomSpawnManager extends BaseClass {
 
                 const result = spawn.spawnCreep(creepConfig.body, name, { memory: { role } })
 
-                if (result !== OK) {
+                // calculate how long it will take to spawn this creep
+                const spawnTime = creepConfig.body.reduce((total, part) => total + BODYPART_COST[part], 0)
+
+                if (result === OK) {
+                    this.room.memory.next_spawn = Game.time + spawnTime + this.config.spawnDelay
+                } else {
                     this.log(`Failed to spawn ${name}: ${result}`)
                 }
             }
@@ -87,12 +99,11 @@ export default class RoomSpawnManager extends BaseClass {
         if (!roomConfig || !roomConfig.creeps[role]) return null
 
         const roleConfig = roomConfig.creeps[role]
-        const contextBuilder = new ContextBuilder(room)
 
-        const conditionsMet = roleConfig.conditions.every((cond: string) => contextBuilder.evaluateExpression(cond))
+        const conditionsMet = roleConfig.conditions.every((cond: string) => this.evaluateExpression(cond))
         if (!conditionsMet) return null
 
-        const max = contextBuilder.evaluateExpression(roleConfig.max)
+        const max = Math.floor(this.evaluateExpression(roleConfig.max))
         const body = this.generateBody(room, role)
 
         return { max, body }
@@ -121,10 +132,5 @@ export default class RoomSpawnManager extends BaseClass {
         }
 
         return `${name}${i}`
-    }
-
-    // helper function to get creeps by role
-    private creepsByRole(role: string): Creep[] {
-        return this.creeps.filter(creep => creep.memory.role === role)
     }
 }
