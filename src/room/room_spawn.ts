@@ -12,9 +12,9 @@ declare global {
 }
 
 export default class RoomSpawnManager extends BaseClass {
-    config: RoomConfig
-    creeps: Creep[]
-    spawns: StructureSpawn[]
+    public config: RoomConfig
+    public creeps: Creep[]
+    public spawns: StructureSpawn[]
 
     constructor(room: Room) {
         // enable debugging for this class
@@ -25,13 +25,10 @@ export default class RoomSpawnManager extends BaseClass {
         this.spawns = this.getContext('spawns')
 
         this.log(`**context loaded**:`, {
-            config: !!this.config,
+            config: this.config,
             creeps: this.creeps.length,
             spawns: this.spawns.length,
-        })
-
-        // set some extra context
-        this.setContext('roomName', room.name)
+        }, 'detailed')
     }
 
     run() {
@@ -43,9 +40,8 @@ export default class RoomSpawnManager extends BaseClass {
         }
 
         const roleConfig = this.allRolesConfig(this.room)
-        console.log('roleConfig:', JSON.stringify(roleConfig))
 
-        this.log(`**Creep Loadouts** all creep loadouts:`, roleConfig)
+        this.log(`**Creep Loadouts** all creep loadouts:`, roleConfig, 'detailed')
 
         // loop through each spawn and spawn creeps
         this.spawns.forEach(spawn => {

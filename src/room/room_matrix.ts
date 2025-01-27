@@ -1,13 +1,14 @@
-import cache from 'utils/cache'
 import utils from 'utils/utils'
 import RoomBuilder from './room_builder'
 
 export default class RoomMatrix extends RoomBuilder {
-    matrix: CostMatrix
+    public matrix: CostMatrix
+    terrain: RoomTerrain
 
     constructor(room: Room) {
         super(room)
 
+        this.terrain = Game.map.getRoomTerrain(this.room.name)
         this.matrix = new PathFinder.CostMatrix()
 
         this.buildRoomCostMatrix()
@@ -20,7 +21,7 @@ export default class RoomMatrix extends RoomBuilder {
         return this.buildRoomCreepMatrix(creep, options)
     }
 
-    private buildRoomCostMatrix(options: TravelerOptions = {}): CostMatrix {
+    private buildRoomCostMatrix(options: TravelerOptions = {}): void {
         const {
             highCost = 8,           // Default high cost
             edgeCost = 200,         // Default edge cost
@@ -31,12 +32,10 @@ export default class RoomMatrix extends RoomBuilder {
             ...TRAVELER_DEFAULT
         } = options
 
-        const terrain = Game.map.getRoomTerrain(this.room.name)
-
         // set swamp and plain costs
         utils.getGridNeighbors(0, 0, 50)
             // remap with terrain type
-            .map(([x, y]) => ({ x, y, type: terrain.get(x, y) }))
+            .map(([x, y]) => ({ x, y, type: this.terrain.get(x, y) }))
             // set costs
             .forEach(({ x, y, type }) => {
                 const cost = this.matrix.get(x, y)
@@ -87,7 +86,7 @@ export default class RoomMatrix extends RoomBuilder {
                 // remove out of bounds
                 .filter(([x, y]) => x >= 0 && x < 50 && y >= 0 && y < 50)
                 // ignore walls
-                .filter(([x, y]) => terrain.get(x, y) === TERRAIN_MASK_WALL)
+                .filter(([x, y]) => this.terrain.get(x, y) === TERRAIN_MASK_WALL)
                 // remap with existing cost
                 .map(([x, y]) => ({ x, y, cost: this.matrix.get(x, y) }))
                 // set new cost
@@ -104,7 +103,7 @@ export default class RoomMatrix extends RoomBuilder {
                     // remove out of bounds
                     .filter(([x, y]) => x >= 0 && x < 50 && y >= 0 && y < 50)
                     // ignore walls
-                    .filter(([x, y]) => terrain.get(x, y) !== TERRAIN_MASK_WALL)
+                    .filter(([x, y]) => this.terrain.get(x, y) !== TERRAIN_MASK_WALL)
                     // remap with existing cost
                     .map(([x, y]) => ({ x, y, cost: this.matrix.get(x, y) }))
                     // set new cost
@@ -114,7 +113,7 @@ export default class RoomMatrix extends RoomBuilder {
             })
 
         //room.find(FIND_STRUCTURES)
-        this.allStructures
+        this.structures
             // remap with existing cost
             .map(({ pos: { x, y, }, structureType }) => ({ x, y, structureType, cost: this.matrix.get(x, y) }))
 
@@ -129,7 +128,7 @@ export default class RoomMatrix extends RoomBuilder {
             })
 
         //room.find(FIND_CONSTRUCTION_SITES)
-        this.constructureSites
+        this.constructions
             // remap with existing cost
             .map(({ pos: { x, y, }, structureType }) => ({ x, y, structureType, cost: this.matrix.get(x, y) }))
             .forEach(({ cost, structureType, x, y }) => {
@@ -141,11 +140,8 @@ export default class RoomMatrix extends RoomBuilder {
                     this.matrix.set(x, y, 255)
                 }
             })
-
-        return this.matrix
     }
 
-    @cache('buildRoomCreepMatrix', 1)
     private buildRoomCreepMatrix(creep: Creep, options: TravelerOptions = {}): CostMatrix {
         const costMatrix = this.matrix.clone()
 

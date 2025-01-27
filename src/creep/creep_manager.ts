@@ -69,7 +69,7 @@ export default class CreepManager extends BaseClass {
                 creep: this.creep.id,
             },
             storage: this.creep.store,
-        })
+        }, 'detailed')
 
         // if not tasks found, find some
         if (this.creep.memory.tasks.length === 0) {

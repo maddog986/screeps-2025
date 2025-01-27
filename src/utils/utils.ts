@@ -114,6 +114,7 @@ export default class utils {
         return this.getRangeTo(pos1, pos2) <= range
     }
 
+    @cache("findOptimalPosition", 100)
     static findOptimalPosition(room: Room, position: RoomPosition, range: number = 1): RoomPosition | undefined {
         const adjacentPositions: RoomPosition[] = []
 

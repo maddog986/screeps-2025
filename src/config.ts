@@ -1,4 +1,6 @@
 declare global {
+    type DebugLevel = 'basic' | 'detailed'
+
     interface RoomConfig {
         spawnDelay: number
         creeps: {
@@ -35,6 +37,8 @@ declare global {
 }
 
 interface Config {
+    debug: boolean | DebugLevel
+
     visuals: {
         enabled: boolean
         show_matrix: boolean
@@ -47,6 +51,8 @@ interface Config {
 }
 
 export const CONFIG: Config = {
+    debug: "detailed",                            // enable/disable debugging
+
     visuals: {                                 // visuals
         enabled: true,                         // enable/disable visuals
         show_matrix: true,                    // show pathfinding matrix
@@ -120,8 +126,8 @@ export const CONFIG: Config = {
             build: {                            // building
                 enabled: true,                 // enable/disable auto building
                 show_build: true,              // show build orders
-                show_build_levels: true,       // show build levels
-                max_constructions: 0,           // max number of construction sites to place
+                show_build_levels: false,       // show build levels
+                max_constructions: 3,           // max number of construction sites to place
                 auto_build_roads_level: 3.6,    // build roads at this level
                 auto_build_containers: 3.2,     // build containers at this level
                 build_orders: {                 // build orders

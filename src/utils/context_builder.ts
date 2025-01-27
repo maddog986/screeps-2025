@@ -2,9 +2,10 @@ import Debuggable from './debugger'
 import utils from './utils'
 
 export default class ContextBuilder extends Debuggable {
-    room: Room
-    memoizationCache: Record<string, any>
-    proxy: Record<string, any>
+    protected room: Room
+
+    private memoizationCache: Record<string, any>
+    private proxy: Record<string, any>
 
     constructor(room: Room, prefix: string) {
         super(prefix)
@@ -17,6 +18,7 @@ export default class ContextBuilder extends Debuggable {
             RESOURCE_ENERGY: RESOURCE_ENERGY,
 
             room: room,
+            roomName: room.name,
             controller: this.room?.controller,
 
             // Find functions
@@ -73,33 +75,33 @@ export default class ContextBuilder extends Debuggable {
         return (...args: any[]) => {
             const key = `${Game.time}-${fn.name}-${JSON.stringify(args)}`
             if (this.memoizationCache[key] === undefined) {
-                console.log(`[${Game.time}]**memoize:** saved: ${fn.name}(${args})`)
+                // console.log(`[${Game.time}]**memoize:** saved: ${fn.name}(${args})`)
                 this.memoizationCache[key] = fn(...args)
             } else {
-                console.log(`[${Game.time}]**memoize:** used: ${fn.name}(${args})`)
+                // console.log(`[${Game.time}]**memoize:** used: ${fn.name}(${args})`)
             }
             return this.memoizationCache[key]
         }
     }
 
-    contextKeys() {
+    protected contextKeys() {
         return Object.keys(this.proxy)
     }
 
-    contextValues() {
+    protected contextValues() {
         return Object.values(this.proxy)
     }
 
-    setContext(key: string, value: any): void {
+    protected setContext(key: string, value: any): void {
         this.proxy[key] = value
     }
 
-    getContext(key: string): any {
+    protected getContext(key: string): any {
         return typeof this.proxy[key] === 'function' ? this.proxy[key]() : this.proxy[key]
     }
 
-    evaluateExpression(expression: string): any {
-        console.log('evaluateExpression:', expression)
+    protected evaluateExpression(expression: string): any {
+        // console.log('evaluateExpression:', expression)
         // Object.keys(this.proxy).forEach((key) => {
         //     console.log(`<strong>key:</strong> ${key} <strong>value:</strong> ${this.proxy[key]}`)
         // })

@@ -14,40 +14,55 @@ declare global {
 }
 
 export default class RoomBuilder extends RoomSpawnManager {
-    allStructures: AnyStructure[]
-    containers: AnyStructure[]
-    constructureSites: ConstructionSite<BuildableStructureConstant>[]
-    sources: Source[]
-    controllerLevel: number
-    spawn: StructureSpawn
+    public structures: AnyStructure[]
+    public containers: AnyStructure[]
+    public constructions: ConstructionSite<BuildableStructureConstant>[]
+    public sources: Source[]
+    public controllerLevel: number
+    public spawn: StructureSpawn
+
+    private buildable: StructurePosition[] = []
 
     constructor(room: Room) {
         super(room)
 
         this.sources = this.getContext('sources') //this.room.find(FIND_SOURCES)
-        this.constructureSites = this.getContext('constructionSites') // this.room.find(FIND_MY_CONSTRUCTION_SITES)
-        this.allStructures = this.getContext('structures') // this.room.find(FIND_STRUCTURES)
+        this.constructions = this.getContext('constructionSites') // this.room.find(FIND_MY_CONSTRUCTION_SITES)
+        this.structures = this.getContext('structures') // this.room.find(FIND_STRUCTURES)
         this.containers = this.getContext('containers') // this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_CONTAINER)
         this.controllerLevel = this.getContext('controllerLevel')
         this.spawn = this.spawns[0]
 
-        this.setContext('testing', true)
+        if (this.config.build.enabled) {
+            this.buildable = this.process_structures()
+        }
 
         this.log(`**RoomBuilder** context loaded:`, {
             controllerLevel: this.controllerLevel,
             sources: this.sources.length,
-            constructionSitess: this.constructureSites.length,
-            allStructures: this.allStructures.length,
+            constructionSitess: this.constructions.length,
+            allStructures: this.structures.length,
             containers: this.containers.length,
             spawn: this.spawn ? this.spawn.id : 'none',
-        })
+            buildable: this.buildable,
+        }, 'detailed')
     }
 
     run() {
         super.run()
 
-        this.displayMatrix()
-        this.buildStructures()
+        if (CONFIG.visuals.enabled) {
+            if (this.config.build.show_build) {
+                this.displayBuildStructures()
+            }
+            if (CONFIG.visuals.show_matrix) {
+                this.displayMatrix()
+            }
+        }
+
+        if (this.config.build.enabled && this.buildable.length > 0) {
+            this.buildStructures()
+        }
     }
 
     /**
@@ -94,8 +109,8 @@ export default class RoomBuilder extends RoomSpawnManager {
         // .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure) === i)
     }
 
-    @cache("process_structures", 1)
-    process_structures(): StructurePosition[] {
+    @cache("process_structures", 100)
+    private process_structures(): StructurePosition[] {
         const buildConfig = CONFIG.rooms[this.room.name]?.build
         const buildOrder = buildConfig?.build_orders
         if (!buildOrder || !this.spawn) return []
@@ -201,21 +216,19 @@ export default class RoomBuilder extends RoomSpawnManager {
     }
 
     private displayBuildStructures() {
-        if (!CONFIG.visuals.enabled) return
+        if (!CONFIG.visuals.enabled || !this.buildable.length) return
 
-        const buildable_structures = this.process_structures()
-
-        for (const { x, y, structure, level } of buildable_structures) {
+        for (const { x, y, structure, level } of this.buildable) {
             this.room.visual.structure(new RoomPosition(x, y, this.room.name), structure as RoomVisualStructure)
         }
 
-        const roads: StructurePosition[] = [...this.allStructures, ...this.constructureSites]
+        const roads: StructurePosition[] = [...this.structures, ...this.constructions]
             // filter out roads
             .filter(({ structureType }) => structureType === STRUCTURE_ROAD)
             // remap to structure positions
             .map(({ pos }) => ({ x: pos.x, y: pos.y, level: this.config.build.auto_build_roads_level, structure: STRUCTURE_ROAD }))
 
-        roads.push(...buildable_structures.filter(({ structure }) => structure === STRUCTURE_ROAD))
+        roads.push(...this.buildable.filter(({ structure }) => structure === STRUCTURE_ROAD))
 
         roads
             .forEach(({ x, y, level }) => {
@@ -233,7 +246,7 @@ export default class RoomBuilder extends RoomSpawnManager {
 
         if (!this.config.build.show_build_levels) return
 
-        for (const { x, y, structure, level } of buildable_structures) {
+        for (const { x, y, structure, level } of this.buildable) {
             // draw text above the structure with level
             this.room.visual.text(level.toString(), x, y + 0.1, {
                 font: '0.3 Arial',
@@ -249,7 +262,7 @@ export default class RoomBuilder extends RoomSpawnManager {
     private constructStructure(structure: StructurePosition) {
         if (!this.config.build.enabled) return
 
-        const constructionSites = this.constructureSites
+        const constructionSites = this.constructions
         if ((constructionSites.length + this.built_structures) >= this.config.build.max_constructions) return
 
         const pos = new RoomPosition(structure.x, structure.y, this.room.name)
@@ -260,20 +273,13 @@ export default class RoomBuilder extends RoomSpawnManager {
 
     // build structures
     private buildStructures() {
-        if (!this.config.build.enabled) return
-
         const spawn = this.spawn
         if (!spawn) return
 
-        const controllerLevel = this.room.controller!.level + (this.room.controller!.progress / this.room.controller!.progressTotal)
-
-        const buildable_structures = this.process_structures()
+        const controllerLevel: number = this.getContext("controllerLevel") // this.room.controller!.level + (this.room.controller!.progress / this.room.controller!.progressTotal)
+        const buildable_structures = this.buildable
             // filter out higher levels
             .filter(({ level }) => level <= controllerLevel)
-
-        if (this.config.build.show_build) {
-            this.displayBuildStructures()
-        }
 
         this.log(`**RoomBuilder** Buildable structures to build ${buildable_structures.length}`)
 
@@ -289,7 +295,7 @@ export default class RoomBuilder extends RoomSpawnManager {
         if (this.config.build.max_constructions > 0) {
             // build the structures
             buildable_structures
-                .slice(0, Math.min(buildable_structures.length, Math.max(0, this.config.build.max_constructions - this.constructureSites.length)))
+                .slice(0, Math.min(buildable_structures.length, Math.max(0, this.config.build.max_constructions - this.constructions.length)))
                 .forEach((structure) => {
                     this.constructStructure(structure)
                 })
@@ -298,15 +304,13 @@ export default class RoomBuilder extends RoomSpawnManager {
 
     // display the room matrix
     private displayMatrix() {
-        if (!CONFIG.visuals.enabled || !CONFIG.visuals.show_matrix) return
-
         // lets visualize the room matrix
-        const room_matrix = this.room.manager.matrix
+        const matrix = this.room.manager.matrix
 
         // loop through the matrix, display a number on each tile with its cost
         for (let y = 0; y < 50; y++) {
             for (let x = 0; x < 50; x++) {
-                const cost = room_matrix.get(x, y)
+                const cost = matrix.get(x, y)
                 this.room.visual.text(cost.toString(), x, y + 0.1, {
                     font: '0.4 Arial',
                     opacity: 0.35

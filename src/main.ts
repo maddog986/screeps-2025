@@ -66,7 +66,6 @@ export const loop = () => {
 		room.manager.flushLogs()
 	})
 
-
 	// Object.values(Game.creeps).forEach(c => c.drop(RESOURCE_ENERGY))
 
 	// end of tick extra tasks

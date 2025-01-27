@@ -1,33 +1,20 @@
-declare global {
-    type DebugLevel = 'basic' | 'detailed' | 'informative'
-}
+import { CONFIG } from 'config'
 
 const LEVEL_HIERARCHY: Record<DebugLevel, number> = {
     basic: 1,
     detailed: 2,
-    informative: 3,
 }
 
 export default class Debuggable {
     private debugPrefix: string = '';
     private logs: { level: DebugLevel; messages: any[] }[] = [];
 
-    /**
-     * Constructs the Debuggable instance with initial settings.
-     * @param debugEnabled - Whether debugging is enabled.
-     * @param debugPrefix - Prefix for debug messages (e.g., class name or context).
-     * @param debugLevel - Debug level ('basic', 'informative', 'detailed').
-     */
     constructor(debugPrefix: string = '') {
         this.debugPrefix = `${this.constructor.name}[${debugPrefix}]`
     }
 
-    /**
-     * Logs a debug message if debugging is enabled and meets the debug level requirement.
-     * @param args - Any number of arguments to log, with an optional debug level as the last argument.
-     */
     public log(...args: any[]): void {
-        const levels: DebugLevel[] = ['basic', 'informative', 'detailed']
+        const levels: DebugLevel[] = Object.keys(LEVEL_HIERARCHY) as DebugLevel[]
 
         // Extract the level if the last argument is a valid level, default to 'basic'.
         let level: DebugLevel = 'basic'
@@ -40,19 +27,15 @@ export default class Debuggable {
         this.logs.push({ level, messages: args })
     }
 
-    /**
-     * Displays all logs for the current instance as a single formatted HTML block with markdown, filtered by a specified level.
-     * @param flushLevel - The level to flush logs for ('basic', 'informative', 'detailed').
-     */
-    public flushLogs(flushLevel: DebugLevel = 'detailed'): void {
-        if (this.logs.length === 0) return
+    public flushLogs(): void {
+        if (!CONFIG.debug || this.logs.length === 0) return
 
         let output = `<details>` +
             `<summary style='color:white;margin:0;'>[${Game.time}] <strong>${this.debugPrefix} </strong>:</summary>` +
             `<div style='display:flex;flex-direction:column;gap:8px;padding:4px 0;'>`
 
         this.logs
-            .filter(({ level }) => LEVEL_HIERARCHY[level] <= LEVEL_HIERARCHY[flushLevel])
+            .filter(({ level }) => LEVEL_HIERARCHY[level] <= LEVEL_HIERARCHY[CONFIG.debug as DebugLevel])
             .forEach(({ level, messages }) => {
                 messages.forEach(message => {
                     if (typeof message === 'object') {
