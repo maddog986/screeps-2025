@@ -44,7 +44,7 @@ const creepActions: Record<string, (base: CreepManager, target: TargetTypes | Ro
         return { success: result, actions: { work: result }, persistent: true }
     },
     transfer: ({ creep, completed }, target) => {
-        if (!(target instanceof Structure) || 'store' in target === false) {
+        if ('store' in target === false) {
             return { success: OK }
         }
 
@@ -101,7 +101,7 @@ const creepActions: Record<string, (base: CreepManager, target: TargetTypes | Ro
             return { success: OK }
         }
 
-        if (!creep.pos.isNearTo(target)) {
+        if (creep.pos.getRangeTo(target) > 3) {
             return { success: ERR_NOT_IN_RANGE, persistent: true } // signal move to target
         }
 
@@ -118,6 +118,41 @@ const creepActions: Record<string, (base: CreepManager, target: TargetTypes | Ro
         const energyPerTick = workParts * HARVEST_POWER
 
         if (energyPerTick >= creep.store.getUsedCapacity(RESOURCE_ENERGY)) {
+            return { success: OK, actions: { work: result } }
+        }
+
+        return { success: ERR_BUSY, persistent: true, actions: { work: result } }
+    },
+    withdraw: ({ creep, completed }, target) => {
+        if (!creep.pos.isNearTo(target)) {
+            return { success: ERR_NOT_IN_RANGE, persistent: true } // signal move to target
+        }
+
+        if ('store' in target === false || creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
+            return { success: OK }
+        }
+
+        if (target instanceof Creep) {
+            if (target.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+                return { success: OK }
+            }
+
+            if (target.manager.completed.has("transfer")) return { success: ERR_BUSY, persistent: true }
+
+            const result = target.transfer(creep, RESOURCE_ENERGY)
+
+            if (result === ERR_NOT_ENOUGH_RESOURCES || target.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+                return { success: OK }
+            }
+
+            target.manager.completed.add("transfer")
+
+            return { success: OK }
+        }
+
+        const result = creep.withdraw(target, RESOURCE_ENERGY)
+
+        if (result === ERR_NOT_ENOUGH_RESOURCES || creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
             return { success: OK, actions: { work: result } }
         }
 

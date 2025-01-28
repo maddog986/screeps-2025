@@ -1,3 +1,4 @@
+import { CONFIG } from 'config'
 import Debuggable from './debugger'
 import utils from './utils'
 
@@ -7,9 +8,13 @@ export default class ContextBuilder extends Debuggable {
     private memoizationCache: Record<string, any>
     private proxy: Record<string, any>
 
+    public config: RoomConfig
+
     constructor(room: Room, prefix: string) {
         super(prefix)
+
         this.room = room
+        this.config = CONFIG.rooms[room.name]
         this.memoizationCache = {} // Cache storage
 
         // Base context definitions
@@ -48,6 +53,10 @@ export default class ContextBuilder extends Debuggable {
             walkablePositions: this.walkablePositions.bind(this),
             creepsByRole: this.creepsByRole.bind(this),
         }
+
+        // for (const role in Object.keys(this.config.creeps)) {
+        //     baseContext[role + 's'] = this.creepsByRole.bind(this)(role)
+        // }
 
         // Memoize all functions in the base context
         for (const key in baseContext) {
@@ -147,23 +156,23 @@ export default class ContextBuilder extends Debuggable {
     isNotOverAssigned(target: TargetTypes | undefined): boolean {
         if (!target) return false
 
-        const free_energy = this.getFreeCapacity(target as any)
-        if (free_energy === 0) return false
+        const freeEnergy = this.getFreeCapacity(target as any)
+        if (freeEnergy === 0) return false
 
         const walkablePositions = this.walkablePositions(target)
         if (walkablePositions === 0) return false
 
-        const assigned_creeps = this.assignedCreeps(target, 'transfer')
-        if (assigned_creeps.length === 0) return true
+        const assignedCreeps = this.assignedCreeps(target, 'transfer')
+        if (assignedCreeps.length === 0) return true
 
-        const assignedCreepsEnergy = assigned_creeps.reduce((total, c) => total + this.getFreeCapacity(c), 0)
+        const assignedCreepsEnergy = assignedCreeps.reduce((total, c) => total + this.getFreeCapacity(c), 0)
 
         this.log(
-            `**notOverAssigned** target: ${target} room: ${this.room} assigned_creeps: ${assigned_creeps.length} walkablePositions: ${walkablePositions} assignedCreepsEnergy: ${assignedCreepsEnergy} stored: ${free_energy}`,
+            `**notOverAssigned** target: ${target} room: ${this.room} assigned_creeps: ${assignedCreeps.length} walkablePositions: ${walkablePositions} assignedCreepsEnergy: ${assignedCreepsEnergy} stored: ${freeEnergy}`,
             'informative'
         )
 
-        return walkablePositions > assigned_creeps.length && free_energy > assignedCreepsEnergy
+        return walkablePositions > assignedCreeps.length && freeEnergy > assignedCreepsEnergy
     }
 
     assignedCreeps(target: TargetTypes | undefined, action: string | undefined = undefined): Creep[] {

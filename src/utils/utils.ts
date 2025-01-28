@@ -158,20 +158,6 @@ export default class utils {
         return new RoomPosition(obj.x, obj.y, obj.roomName)
     }
 
-    // static findPath(creep: Creep, target: RoomPosition, options: TravelerOptions = {}): string {
-    //     const { range = 1, ignoreCreeps = false } = options
-    //     return creep.room.findPath(creep.pos, target, {
-    //         range,
-    //         ignoreCreeps,
-    //         ignoreRoads: true,
-    //         maxRooms: 1,
-    //         maxOps: 1000,
-    //         costCallback: (roomName, costMatrix) => this.buildRoomCostMatrix(roomName, costMatrix),
-    //     })
-    //         .map(step => step.direction)
-    //         .join('')
-    // }
-
     static pathToDirections(path: RoomPosition[]): DirectionConstant[] {
         const directions: DirectionConstant[] = []
 
@@ -237,4 +223,20 @@ export default class utils {
         return new RoomPosition(x, y, roomName)
     }
 
+    static reverseDirection(direction: DirectionConstant): DirectionConstant {
+        return ((direction + 4 - 1) % 8) + 1 as DirectionConstant
+    }
+
+    static getRandomAdjacentDirection(direction: DirectionConstant): DirectionConstant {
+        // Array of relative offsets for adjacent directions
+        const adjacentOffsets = [-1, 0, 1]
+
+        // Randomly pick an offset
+        const randomOffset = adjacentOffsets[Math.floor(Math.random() * adjacentOffsets.length)]
+
+        // Calculate the new direction
+        const newDirection = ((direction + randomOffset - 1 + 8) % 8) + 1 as DirectionConstant
+
+        return newDirection
+    };
 }

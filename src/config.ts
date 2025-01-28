@@ -22,10 +22,8 @@ declare global {
     interface TaskConfig {
         conditions: string[]
         validates?: string[]
-        task: {
-            action: string
-            target: string
-        }
+        action: string
+        target: string
     }
 
     interface CreepRoleConfig {
@@ -65,7 +63,7 @@ export const CONFIG: Config = {
             creeps: {
                 harvester: {                    // role
                     body: [WORK, CARRY, CARRY, MOVE, MOVE],
-                    max: "Math.max(1, sources().filter(notOverAssigned).reduce((a,b) => a + walkablePositions(b), 0) + (creeps().filter(c => usedCapacity(c) > 45).length * 2) - (creeps().filter(c => usedCapacity(c) < 20).length * 3))",        // max number of creeps
+                    max: "Math.min(8, Math.max(1, sources().filter(notOverAssigned).reduce((a,b) => a + walkablePositions(b), 0) + (creeps().filter(c => usedCapacity(c) > 45).length * 2) - (creeps().filter(c => usedCapacity(c) < 20).length * 3)))",        // max number of creeps
 
                     conditions: [
                         // "mules.length > 0",
@@ -75,22 +73,36 @@ export const CONFIG: Config = {
                     tasks: [                    // tasks
                         // refill spawn
                         {
+                            action: "transfer",
+                            target: "closestSpawn()",
                             conditions: [
-                                "usedCapacity(creep)", // creep is full
-                                "notOverAssigned(target)" // Ensure the spawn is not over assigned
-                                //    "spawns().filter(freeCapacity).filter(notOverAssigned).length > 0" // spawn has free capacity
+                                "usedCapacity(creep)",          // creep is full
+                                "freeCapacity(target)",          // Ensure the spawn still has free capacity
+                                "notOverAssigned(target)",      // Ensure the spawn is not over assigned
                             ],
                             validates: [
                                 "usedCapacity(creep)",
                                 "freeCapacity(target)", // Ensure the spawn still has free capacity
                             ],
-                            task: {
-                                action: "transfer",
-                                target: "closestSpawn"
-                            }
+                        },
+                        // refill builder
+                        {
+                            action: "transfer",
+                            target: "creepsByRole('builder').filter(freeCapacity).shift()",
+                            conditions: [
+                                "usedCapacity(creep)",          // creep is full
+                                "freeCapacity(target)",         // Ensure the spawn still has free capacity
+                                "notOverAssigned(target)",      // Ensure the spawn is not over assigned
+                            ],
+                            validates: [
+                                "usedCapacity(creep)",
+                                "freeCapacity(target)", // Ensure the spawn still has free capacity
+                            ],
                         },
                         // harvest source
                         {
+                            action: "harvest",
+                            target: "closestSource()",
                             conditions: [
                                 "freeCapacity(creep) > 0", // creep has free capacity
                                 //"notOverAssignedSource(target)"
@@ -100,13 +112,11 @@ export const CONFIG: Config = {
                                 "freeCapacity(creep)",
                                 // "notOverAssignedSource(target)"
                             ],
-                            task: {
-                                action: "harvest",
-                                target: "closestSource"
-                            }
                         },
                         // upgrade room controller
                         {
+                            action: "upgrade",
+                            target: "controller",
                             conditions: [
                                 "usedCapacity(creep)",
                                 "!freeCapacity(closestSpawn())"
@@ -115,11 +125,59 @@ export const CONFIG: Config = {
                                 "usedCapacity(creep)",
                                 "spawns().filter(freeCapacity).filter(notOverAssigned).length === 0" // Ensure the spawn is full
                             ],
-                            task: {
-                                action: "upgrade",
-                                target: "controller"
-                            }
                         },
+                    ]
+                },
+                builder: {
+                    body: [WORK, CARRY, MOVE, MOVE],
+                    max: "Math.ceil(constructionSites().length/2)",
+                    conditions: [
+                        "constructionSites().length > 0"
+                    ],
+                    tasks: [
+                        // // withdraw energy from harvester
+                        // {
+                        //     conditions: [
+                        //         "freeCapacity(creep) > 0", // creep has free capacity
+                        //         // "notOverAssignedSource(target)"
+                        //     ],
+                        //     validates: [
+                        //         "freeCapacity(creep)",
+                        //         "hasCapacity(target)"
+                        //         // "notOverAssignedSource(target)"
+                        //     ],
+                        //     task: {
+                        //         action: "withdraw",
+                        //         target: "creepsByRole('harvester').filter(hasCapacity).shift()"
+                        //     }
+                        // },
+
+                        // harvest source
+                        {
+                            action: "harvest",
+                            target: "closestSource()",
+                            conditions: [
+                                "freeCapacity(creep) > 0", // creep has free capacity
+                                //"notOverAssignedSource(target)"
+                            ],
+                            validates: [
+                                "target.energy > 0", // Ensure the source still has energy
+                                "freeCapacity(creep)",
+                                // "notOverAssignedSource(target)"
+                            ],
+                        },
+                        {
+                            action: "build",
+                            target: "closestConstructionSite()",
+                            conditions: [
+                                "usedCapacity(creep) > 0",
+                                "constructionSites().length > 0"
+                            ],
+                            validates: [
+                                "usedCapacity(creep) > 0",
+                                // "constructionSites().length > 0"
+                            ],
+                        }
                     ]
                 }
             },

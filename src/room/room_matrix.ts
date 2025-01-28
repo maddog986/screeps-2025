@@ -1,12 +1,26 @@
 import utils from 'utils/utils'
-import RoomBuilder from './room_builder'
+import RoomSpawnManager from './room_spawn'
 
-export default class RoomMatrix extends RoomBuilder {
-    public matrix: CostMatrix
+export default class RoomMatrix extends RoomSpawnManager {
+    matrix: CostMatrix
     terrain: RoomTerrain
+
+    public structures: AnyStructure[]
+    public containers: AnyStructure[]
+    public constructions: ConstructionSite<BuildableStructureConstant>[]
+    public sources: Source[]
+    public controllerLevel: number
+    public spawn: StructureSpawn
 
     constructor(room: Room) {
         super(room)
+
+        this.sources = this.getContext('sources') //this.room.find(FIND_SOURCES)
+        this.constructions = this.getContext('constructionSites') // this.room.find(FIND_MY_CONSTRUCTION_SITES)
+        this.structures = this.getContext('structures') // this.room.find(FIND_STRUCTURES)
+        this.containers = this.getContext('containers') // this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_CONTAINER)
+        this.controllerLevel = this.getContext('controllerLevel')
+        this.spawn = this.spawns[0]
 
         this.terrain = Game.map.getRoomTerrain(this.room.name)
         this.matrix = new PathFinder.CostMatrix()
@@ -17,6 +31,7 @@ export default class RoomMatrix extends RoomBuilder {
     }
 
     getMatrix(creep: Creep, options: TravelerOptions = {}): CostMatrix {
+        // console.log('**RoomMatrix:** getMatrix', creep)
         this.log(`**RoomMatrix:** ${this.room.name} matrix built for creep ${creep.name}.`)
         return this.buildRoomCreepMatrix(creep, options)
     }

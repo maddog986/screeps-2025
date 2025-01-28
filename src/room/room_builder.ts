@@ -1,8 +1,8 @@
 import { CONFIG } from 'config'
 import { STRUCTURE_KEY } from 'utils/RoomVisual.prototype'
-import cache from 'utils/cache'
 import utils from 'utils/utils'
-import RoomSpawnManager from './room_spawn'
+import '../utils/RoomVisual.prototype'
+import RoomMatrix from './room_matrix'
 
 declare global {
     interface StructurePosition {
@@ -13,28 +13,14 @@ declare global {
     }
 }
 
-export default class RoomBuilder extends RoomSpawnManager {
-    public structures: AnyStructure[]
-    public containers: AnyStructure[]
-    public constructions: ConstructionSite<BuildableStructureConstant>[]
-    public sources: Source[]
-    public controllerLevel: number
-    public spawn: StructureSpawn
-
+export default class RoomBuilder extends RoomMatrix {
     private buildable: StructurePosition[] = []
 
     constructor(room: Room) {
         super(room)
 
-        this.sources = this.getContext('sources') //this.room.find(FIND_SOURCES)
-        this.constructions = this.getContext('constructionSites') // this.room.find(FIND_MY_CONSTRUCTION_SITES)
-        this.structures = this.getContext('structures') // this.room.find(FIND_STRUCTURES)
-        this.containers = this.getContext('containers') // this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_CONTAINER)
-        this.controllerLevel = this.getContext('controllerLevel')
-        this.spawn = this.spawns[0]
-
         if (this.config.build.enabled) {
-            this.buildable = this.process_structures()
+            this.buildable = this.processBuildableStructures()
         }
 
         this.log(`**RoomBuilder** context loaded:`, {
@@ -109,8 +95,7 @@ export default class RoomBuilder extends RoomSpawnManager {
         // .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure) === i)
     }
 
-    @cache("process_structures", 100)
-    private process_structures(): StructurePosition[] {
+    private processBuildableStructures(): StructurePosition[] {
         const buildConfig = CONFIG.rooms[this.room.name]?.build
         const buildOrder = buildConfig?.build_orders
         if (!buildOrder || !this.spawn) return []
@@ -182,7 +167,7 @@ export default class RoomBuilder extends RoomSpawnManager {
                         maxOps: 5000,
                         maxRooms: 1,
                         costCallback: (roomName, costMatrix) => {
-                            costMatrix = this.room.manager.matrix.clone()
+                            costMatrix = this.matrix.clone()
 
                             for (const { x, y, structure } of buildable_structures) {
                                 if (structure === STRUCTURE_WALL) {
@@ -305,7 +290,7 @@ export default class RoomBuilder extends RoomSpawnManager {
     // display the room matrix
     private displayMatrix() {
         // lets visualize the room matrix
-        const matrix = this.room.manager.matrix
+        const matrix = this.matrix
 
         // loop through the matrix, display a number on each tile with its cost
         for (let y = 0; y < 50; y++) {

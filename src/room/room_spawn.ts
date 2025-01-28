@@ -1,5 +1,5 @@
 import { CONFIG } from 'config'
-import BaseClass from 'utils/base_class'
+import ContextBuilder from 'utils/context_builder'
 
 declare global {
     interface CreepMemory {
@@ -11,20 +11,22 @@ declare global {
     }
 }
 
-export default class RoomSpawnManager extends BaseClass {
-    public config: RoomConfig
+export default class RoomSpawnManager extends ContextBuilder {
     public creeps: Creep[]
     public spawns: StructureSpawn[]
 
+    roles: Record<string, { max: number; body: BodyPartConstant[] }>
+
     constructor(room: Room) {
         // enable debugging for this class
-        super(room)
+        super(room, room.name)
 
-        this.config = CONFIG.rooms[room.name]
         this.creeps = this.getContext('creeps')
         this.spawns = this.getContext('spawns')
+        this.roles = this.allRolesConfig(this.room)
 
-        this.log(`**context loaded**:`, {
+        this.log(`**RoomSpawnManager.constructor** loaded:`, {
+            roles: this.roles,
             config: this.config,
             creeps: this.creeps.length,
             spawns: this.spawns.length,
@@ -36,19 +38,18 @@ export default class RoomSpawnManager extends BaseClass {
         if (this.spawns.every(spawn => spawn.spawning || spawn.store.energy < 200)) return
 
         if (this.room.memory?.next_spawn > Game.time) {
+            this.log(`**RoomSpawnManager.run** waiting to spawn in ticks:`, this.room.memory.next_spawn - Game.time)
             return
         }
 
-        const roleConfig = this.allRolesConfig(this.room)
-
-        this.log(`**Creep Loadouts** all creep loadouts:`, roleConfig, 'detailed')
+        this.log(`**Creep Loadouts** all creep loadouts:`, this.roles, 'detailed')
 
         // loop through each spawn and spawn creeps
         this.spawns.forEach(spawn => {
             if (spawn.spawning) return
 
             for (const role in this.config.creeps) {
-                const creepConfig = roleConfig[role]
+                const creepConfig = this.roles[role]
                 if (!creepConfig || !creepConfig.body || !creepConfig.body.length) continue
 
                 const creeps = this.creepsByRole(role)
@@ -61,7 +62,7 @@ export default class RoomSpawnManager extends BaseClass {
                 const result = spawn.spawnCreep(creepConfig.body, name, { memory: { role } })
 
                 // calculate how long it will take to spawn this creep
-                const spawnTime = creepConfig.body.reduce((total, part) => total + BODYPART_COST[part], 0)
+                const spawnTime = creepConfig.body.length * 3
 
                 if (result === OK) {
                     this.room.memory.next_spawn = Game.time + spawnTime + this.config.spawnDelay
