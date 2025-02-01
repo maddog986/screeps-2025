@@ -2,6 +2,7 @@
 
 import { CONFIG } from 'config'
 import BaseClass from 'utils/base_class'
+import { cpuLog } from 'utils/cache'
 import utils from 'utils/utils'
 
 declare global { // using global declaration to extend the existing types
@@ -16,7 +17,7 @@ declare global { // using global declaration to extend the existing types
 
     interface TravelerMemory {
         stuck: number
-        target: { x: number, y: number, roomName: string }
+        target: { x: number, y: number, roomName: string } | { id: string }
         lastPos: { x: number, y: number, roomName: string }
         destination: { x: number, y: number, roomName: string }
         distance: number
@@ -49,7 +50,7 @@ export const TRAVELER_DEFAULT: TravelerOptions = {
     swampCost: 9,           // Default swamp cost
 }
 
-export default class CreepMovement extends BaseClass {
+export default class CreepMovement<TContext extends Record<string, any> = {}> extends BaseClass<TContext> {
     creep: Creep
 
     constructor(creep: Creep) {
@@ -59,12 +60,17 @@ export default class CreepMovement extends BaseClass {
     }
 
     private circle(stroke: string, opacity: number = 0.5) {
-        if (!CONFIG.visuals || !CONFIG.visuals.creep_travel) return
+        if (!CONFIG.visuals.enabled || !CONFIG.visuals.creep_travel) return
         this.creep.room.visual.circle(this.creep.pos, { fill: 'transparent', radius: 0.50, stroke, opacity })
     }
 
-    move(target: RoomPosition, options: TravelerOptions = {}): ScreepsReturnCode {
-        this.creep.manager.log(`**traveler:** attempting to move...`)
+    @cpuLog
+    move(target: TargetTypes | RoomPosition, options: TravelerOptions = {}): ScreepsReturnCode {
+        this.logCpu()
+
+        this.creep.manager.log(`**traveler:** attempting to move to target ${target}`)
+
+        const targetPos: RoomPosition = target instanceof RoomPosition ? target : target.pos
 
         // make sure creep isnt tired
         if (this.creep.fatigue > 0) {
@@ -85,12 +91,18 @@ export default class CreepMovement extends BaseClass {
         // make sure travel memory is set
         this.creep.memory.travel ??= {
             stuck: 0,
-            target: utils.positionToObject(target),
+            target: target instanceof Creep ? { id: target.id } : utils.positionToObject(target as RoomPosition),
             lastPos: new RoomPosition(0, 0, this.creep.room.name),
-            destination: utils.positionToObject(target),
+            destination: utils.positionToObject(targetPos as RoomPosition),
             distance: 0,
             range,
             path: ''
+        }
+
+        // check if the target moved
+        if (target instanceof Creep && !utils.objectToPosition(this.creep.memory.travel.destination).isNearTo(targetPos)) {
+            this.creep.manager.log('**traveler:** target has changed positions. repathing.:')
+            this.creep.memory.travel.path = ''
         }
 
         this.creep.manager.log('**traveler:** creep.memory.travel:', this.creep.memory.travel)
@@ -124,7 +136,7 @@ export default class CreepMovement extends BaseClass {
         }
 
         // check last position of path to make sure its not blocked
-        if (this.creep.memory.travel.path.length) {
+        if (this.creep.memory.travel.path.length < 4) {
             // check for a creep with no travel data that is parked at the destination
             if (Object.values(Game.creeps).some(c => c.my && !c.memory.travel && c.pos.isEqualTo(utils.objectToPosition(this.creep.memory.travel!.destination)))) {
                 this.creep.memory.travel.path = ''
@@ -138,16 +150,16 @@ export default class CreepMovement extends BaseClass {
             this.circle('blue')
 
             // find path
-            const pathFinder = PathFinder.search(this.creep.pos, { pos: target, range }, {
-                maxRooms: 1,
+            const pathFinder = PathFinder.search(this.creep.pos, { pos: targetPos, range }, {
+                maxRooms: 2,
                 maxOps: 2000,
                 roomCallback: (roomName) => this.creep.room.manager.getMatrix(this.creep, options),
             })
 
             // path not found
-            if (pathFinder.incomplete) {
+            if (pathFinder.incomplete && targetPos.roomName === this.creep.room.name) {
                 this.creep.memory.travel.stuck += 1
-                this.creep.manager.log(`**traveler:** failed to find path to target: ${target}`)
+                this.creep.manager.log(`**traveler:** failed to find path to target: ${target}`, pathFinder)
                 return ERR_NO_PATH
             }
 
@@ -155,7 +167,7 @@ export default class CreepMovement extends BaseClass {
 
             // convert path to directions
             const path = utils.pathToDirections(pathFinder.path).join('')
-            this.creep.manager.log(`**traveler:** new path: ${path} to target: ${target}`)
+            this.creep.manager.log(`**traveler:** new path: ${path} from ${this.creep.pos}: to target: ${target}`, { pos: targetPos, range, pathFinder })
 
             // set new path
             this.creep.memory.travel.path = path
@@ -165,7 +177,7 @@ export default class CreepMovement extends BaseClass {
         }
 
         // draw creep travel path
-        if (CONFIG.visuals && CONFIG.visuals.creep_travel) {
+        if (CONFIG.visuals.enabled && CONFIG.visuals.creep_travel) {
             const pathToRoomPositions = utils.directionsToPath(this.creep.pos, this.creep.memory.travel.path.split('').map(dir => Number(dir) as DirectionConstant))
             this.creep.room.visual.poly(pathToRoomPositions, { stroke: '#fff', lineStyle: 'dashed', opacity: 0.2 })
         }
@@ -175,7 +187,7 @@ export default class CreepMovement extends BaseClass {
 
         // move to target
         const result = this.creep.move(nextDirection)
-        this.creep.manager.log(`**traveler:** move result: ${result} to target: ${target}`)
+        this.creep.manager.log(`**traveler:** move result: ${result} to target: ${target} cpu: ${this.getLogCpu()}`)
         return result
     }
 }

@@ -1,5 +1,12 @@
 import cache from './cache'
 
+export enum ROOMTYPE {
+    SOURCEKEEPER = 'SK',
+    CORE = 'CORE',
+    CONTROLLER = 'CTRL',
+    ALLEY = 'ALLEY'
+}
+
 export default class utils {
     @cache("walkablePositions", 1000)
     static walkablePositions(target: RoomPosition, dist = 1): number {
@@ -173,9 +180,14 @@ export default class utils {
 
     static directionsToPath(startPos: RoomPosition, directions: DirectionConstant[]): RoomPosition[] {
         const path: RoomPosition[] = [startPos] // Start with the initial position
+
         let currentPos = startPos
 
         for (const direction of directions) {
+            if (currentPos.x <= 0 || currentPos.x >= 49 || currentPos.y <= 0 || currentPos.y >= 49) {
+                break
+            }
+
             const nextPos = this.getNextPosition(currentPos, direction)
             path.push(nextPos)
             currentPos = nextPos
@@ -185,42 +197,19 @@ export default class utils {
     }
 
     static getNextPosition(pos: RoomPosition, direction: DirectionConstant): RoomPosition {
-        let { x, y } = pos
-        const roomName = pos.roomName
-
-        // Adjust x and y based on the direction
-        switch (direction) {
-            case TOP:
-                y -= 1
-                break
-            case TOP_RIGHT:
-                y -= 1
-                x += 1
-                break
-            case RIGHT:
-                x += 1
-                break
-            case BOTTOM_RIGHT:
-                y += 1
-                x += 1
-                break
-            case BOTTOM:
-                y += 1
-                break
-            case BOTTOM_LEFT:
-                y += 1
-                x -= 1
-                break
-            case LEFT:
-                x -= 1
-                break
-            case TOP_LEFT:
-                y -= 1
-                x -= 1
-                break
+        const directionOffsets = {
+            [TOP]: [0, -1],
+            [TOP_RIGHT]: [1, -1],
+            [RIGHT]: [1, 0],
+            [BOTTOM_RIGHT]: [1, 1],
+            [BOTTOM]: [0, 1],
+            [BOTTOM_LEFT]: [-1, 1],
+            [LEFT]: [-1, 0],
+            [TOP_LEFT]: [-1, -1]
         }
 
-        return new RoomPosition(x, y, roomName)
+        const [dx, dy] = directionOffsets[direction]
+        return new RoomPosition(pos.x + dx, pos.y + dy, pos.roomName)
     }
 
     static reverseDirection(direction: DirectionConstant): DirectionConstant {
@@ -239,4 +228,104 @@ export default class utils {
 
         return newDirection
     };
+
+    static randomDirection(): DirectionConstant {
+        // directions to use when searching for room exists
+        const directions = [FIND_EXIT_TOP, FIND_EXIT_RIGHT, FIND_EXIT_BOTTOM, FIND_EXIT_LEFT]
+        const values = Object.values(directions)
+        return values[Math.floor(values.length * Math.random())]
+    }
+
+
+
+
+
+
+
+
+
+    // static getNextScoutRoom(origin: string): string | null {
+    //     const radius = 3 // Define search radius
+    //     const SCOUT_EXPIRATION = 150 // Adjust based on priority
+
+    //     const nearbyRooms = this.getRoomsInRadius(origin, radius)
+
+    //     const staleRooms = nearbyRooms.filter(room =>
+    //         !Memory.rooms?.[room]?.last_seen ||
+    //         (Game.time - Memory.rooms[room].last_seen) > SCOUT_EXPIRATION
+    //     )
+
+    //     const validRooms = staleRooms.filter(room =>
+    //         !this.isDangerousRoom(room) &&
+    //         !this.hasInvaderCore(room)
+    //     )
+
+    //     return validRooms.length > 0 ? validRooms[0] : null
+    // }
+
+    // static getRoomName(x: number, y: number): string {
+    //     const ew = x < 0 ? `W${Math.abs(x)}` : `E${x}`
+    //     const ns = y < 0 ? `S${Math.abs(y)}` : `N${y}`
+    //     return `${ew}${ns}`
+    // }
+
+    // static getRoomsInRadius(origin: string, radius: number): string[] {
+    //     const originCoords = this.getRoomCoordinates(origin)
+    //     if (!originCoords) return []
+
+    //     const rooms: string[] = []
+
+    //     for (let dx = -radius; dx <= radius; dx++) {
+    //         for (let dy = -radius; dy <= radius; dy++) {
+    //             if (dx === 0 && dy === 0) continue
+    //             const newRoom = this.getRoomName(originCoords.x + dx, originCoords.y + dy)
+    //             if (newRoom) rooms.push(newRoom)
+    //         }
+    //     }
+    //     return rooms
+    // }
+
+    // // Avoid dangerous rooms (Source Keeper & Core rooms)
+    // static isDangerousRoom(roomName: string): boolean {
+    //     const type = this.roomType(roomName)
+    //     return type === ROOMTYPE.SOURCEKEEPER || type === ROOMTYPE.CORE
+    // }
+
+    // // Check for Invader Cores in a room
+    // static hasInvaderCore(roomName: string): boolean {
+    //     const room = Game.rooms[roomName]
+    //     if (!room) return false
+
+    //     return room.find(FIND_HOSTILE_STRUCTURES, {
+    //         filter: (s) => s.structureType === STRUCTURE_INVADER_CORE
+    //     }).length > 0
+    // }
+
+    // static getRoomCoordinates(roomName: string) {
+    //     const coordinateRegex = /(E|W)(\d+)(N|S)(\d+)/g
+    //     const match = coordinateRegex.exec(roomName)
+    //     if (!match) return
+
+    //     return {
+    //         x: Number(match[2]),
+    //         y: Number(match[4]),
+    //         xDir: match[1],
+    //         yDir: match[3],
+    //     }
+    // }
+
+    // static roomType(roomName: string) {
+    //     const coords = this.getRoomCoordinates(roomName)
+    //     if (!coords) return ROOMTYPE.ALLEY
+
+    //     if (coords.x % 10 === 0 || coords.y % 10 === 0) {
+    //         return ROOMTYPE.ALLEY
+    //     } else if (coords.x % 10 != 0 && coords.x % 5 === 0 && coords.y % 10 != 0 && coords.y % 5 === 0) {
+    //         return ROOMTYPE.CORE
+    //     } else if (coords.x % 10 <= 6 && coords.x % 10 >= 4 && coords.y % 10 <= 6 && coords.y % 10 >= 4) {
+    //         return ROOMTYPE.SOURCEKEEPER
+    //     } else {
+    //         return ROOMTYPE.CONTROLLER
+    //     }
+    // }
 }

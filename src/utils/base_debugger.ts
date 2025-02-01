@@ -1,25 +1,26 @@
 import { CONFIG } from 'config'
 
-const LEVEL_HIERARCHY: Record<DebugLevel, number> = {
-    basic: 1,
-    detailed: 2,
+declare global {
+    type DebugLevel = "basic" | "log"
 }
 
-export default class Debuggable {
+export default class BaseDebugger {
     private debugPrefix: string = '';
     private logs: { level: DebugLevel; messages: any[] }[] = [];
 
+    startCpu: number = 0
+    _logCpu: number = 0
+
     constructor(debugPrefix: string = '') {
         this.debugPrefix = `${this.constructor.name}[${debugPrefix}]`
+        this.startCpu = Game.cpu.getUsed()
     }
 
     public log(...args: any[]): void {
-        const levels: DebugLevel[] = Object.keys(LEVEL_HIERARCHY) as DebugLevel[]
-
         // Extract the level if the last argument is a valid level, default to 'basic'.
         let level: DebugLevel = 'basic'
 
-        if (typeof args[args.length - 1] === 'string' && levels.includes(args[args.length - 1] as any)) {
+        if (typeof args[args.length - 1] === 'string' && ["basic", "log"].includes(args[args.length - 1] as any)) {
             level = args.pop() as DebugLevel
         }
 
@@ -27,15 +28,42 @@ export default class Debuggable {
         this.logs.push({ level, messages: args })
     }
 
+    public getCurrentCpu(): number {
+        return Number((Game.cpu.getUsed() - this.startCpu).toFixed(2))
+    }
+
+    public logCpu(): void {
+        this._logCpu = Game.cpu.getUsed()
+    }
+
+    public getLogCpu(): number {
+        return Number((Game.cpu.getUsed() - this._logCpu).toFixed(2))
+    }
+
     public flushLogs(): void {
         if (!CONFIG.debug || this.logs.length === 0) return
+
+        const usedCpu = Game.cpu.getUsed() - this.startCpu
 
         let output = `<details>` +
             `<summary style='color:white;margin:0;'>[${Game.time}] <strong>${this.debugPrefix} </strong>:</summary>` +
             `<div style='display:flex;flex-direction:column;gap:8px;padding:4px 0;'>`
 
-        this.logs
-            .filter(({ level }) => LEVEL_HIERARCHY[level] <= LEVEL_HIERARCHY[CONFIG.debug as DebugLevel])
+        output = this.buildLog(this.logs, "basic", output)
+        output = this.buildLog(this.logs, "log", output)
+
+        output += `</div></details>`
+
+        // Output the entire log as a single HTML block.
+        console.log(output)
+
+        // Clear the logs after flushing.
+        this.logs = []
+    }
+
+    private buildLog(logs: { level: DebugLevel; messages: any[] }[], display_level: DebugLevel, output: string) {
+        logs
+            .filter(({ level }) => level === display_level)
             .forEach(({ level, messages }) => {
                 messages.forEach(message => {
                     if (typeof message === 'object') {
@@ -53,10 +81,10 @@ export default class Debuggable {
                     } else if (typeof message === 'string') {
                         // Convert markdown-style text to HTML.
                         const formattedMessage = message
-                            .replace(/#([0-9A-Fa-f]{6})\[(.*?)\]/g, '<span style="color:#$1;">$2</span>')   // Custom color markdown
-                            .replace(/\*\*(.*?)\*\*/g, '<strong style="font-size:13px">$1</strong>')        // Bold
-                            .replace(/\*(.*?)\*/g, '<em>$1</em>')                                           // Italic
-                            .replace(/`(.*?)`/g, '<code>$1</code>')                                         // Inline code
+                            .replace(/#([0-9A-Fa-f]{6})\[(.*?)\]/g, '<span style="color:#$1;">$2</span>') // Custom color markdown
+                            .replace(/\*\*(.*?)\*\*/g, '<strong style="font-size:13px">$1</strong>') // Bold
+                            .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic
+                            .replace(/`(.*?)`/g, '<code>$1</code>') // Inline code
 
                         output += `<p style='margin:0'>${formattedMessage}</p>`
                     } else {
@@ -68,13 +96,6 @@ export default class Debuggable {
                     }
                 })
             })
-
-        output += `</div></details>`
-
-        // Output the entire log as a single HTML block.
-        console.log(output)
-
-        // Clear the logs after flushing.
-        this.logs = []
+        return output
     }
 }

@@ -1,12 +1,17 @@
+import cache, { cpuLog } from 'utils/cache'
 import utils from 'utils/utils'
 import RoomSpawnManager from './room_spawn'
 
-export default class RoomMatrix extends RoomSpawnManager {
+interface RoomMatrixContext {
+    spawn?: StructureSpawn
+}
+
+export default class RoomMatrix<TContext extends Record<string, any> = {}> extends RoomSpawnManager<TContext & RoomMatrixContext> {
     matrix: CostMatrix
     terrain: RoomTerrain
 
     public structures: AnyStructure[]
-    public containers: AnyStructure[]
+    public containers: StructureContainer[]
     public constructions: ConstructionSite<BuildableStructureConstant>[]
     public sources: Source[]
     public controllerLevel: number
@@ -15,27 +20,40 @@ export default class RoomMatrix extends RoomSpawnManager {
     constructor(room: Room) {
         super(room)
 
-        this.sources = this.getContext('sources') //this.room.find(FIND_SOURCES)
-        this.constructions = this.getContext('constructionSites') // this.room.find(FIND_MY_CONSTRUCTION_SITES)
-        this.structures = this.getContext('structures') // this.room.find(FIND_STRUCTURES)
-        this.containers = this.getContext('containers') // this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_CONTAINER)
+        this.sources = this.getContext('sources', true) //this.room.find(FIND_SOURCES)
+        this.constructions = this.getContext('constructionSites', true) // this.room.find(FIND_MY_CONSTRUCTION_SITES)
+        this.structures = this.getContext('structures', true) // this.room.find(FIND_STRUCTURES)
+        this.containers = this.getContext('containers', true) // this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_CONTAINER)
         this.controllerLevel = this.getContext('controllerLevel')
         this.spawn = this.spawns[0]
+
+        this.setContext('spawn', this.spawn)
+
+        this.log(`**RoomBuilder** context loaded:`, {
+            controllerLevel: this.controllerLevel,
+            containers: this.containers.length,
+            spawn: this.spawn ? this.spawn.id : 'none',
+        })
 
         this.terrain = Game.map.getRoomTerrain(this.room.name)
         this.matrix = new PathFinder.CostMatrix()
 
         this.buildRoomCostMatrix()
-
-        this.log(`**RoomMatrix:** ${this.room.name} matrix built.`)
     }
 
+    @cpuLog
     getMatrix(creep: Creep, options: TravelerOptions = {}): CostMatrix {
         // console.log('**RoomMatrix:** getMatrix', creep)
-        this.log(`**RoomMatrix:** ${this.room.name} matrix built for creep ${creep.name}.`)
-        return this.buildRoomCreepMatrix(creep, options)
+        this.logCpu()
+
+        const matrix = this.buildRoomCreepMatrix(creep, options)
+
+        this.log(`**RoomMatrix:** ${this.room.name} matrix built for creep ${creep.name}. CPU: ${this.getLogCpu()}`)
+
+        return matrix
     }
 
+    @cache('buildRoomCostMatrix', 100)
     private buildRoomCostMatrix(options: TravelerOptions = {}): void {
         const {
             highCost = 8,           // Default high cost
@@ -47,28 +65,30 @@ export default class RoomMatrix extends RoomSpawnManager {
             ...TRAVELER_DEFAULT
         } = options
 
+        this.logCpu()
+
         // set swamp and plain costs
-        utils.getGridNeighbors(0, 0, 50)
-            // remap with terrain type
-            .map(([x, y]) => ({ x, y, type: this.terrain.get(x, y) }))
-            // set costs
-            .forEach(({ x, y, type }) => {
+        for (let y = 0; y < 50; y++) {
+            for (let x = 0; x < 50; x++) {
+                const type = this.terrain.get(x, y)
                 const cost = this.matrix.get(x, y)
 
                 switch (type) {
                     case TERRAIN_MASK_WALL:
                         this.matrix.set(x, y, 255)
 
-                        // get all positions around the wall to increase cost
-                        utils.getNeighbors(x, y, 1)
-                            // remove out of bounds
-                            .filter(([x, y]) => x >= 0 && x < 50 && y >= 0 && y < 50)
-                            // remap
-                            .map(([x, y]) => ({ x, y, cost: this.matrix.get(x, y) }))
-                            // set new cost
-                            .forEach(({ x, y, cost }) => {
-                                this.matrix.set(x, y, Math.min(255, cost + highCost))
-                            })
+                        // nice to have, but its slow as shit
+                        // // Directly check and set costs for adjacent positions
+                        // for (let dx = -1; dx <= 1; dx++) {
+                        //     for (let dy = -1; dy <= 1; dy++) {
+                        //         const nx = x + dx
+                        //         const ny = y + dy
+                        //         if (nx >= 0 && nx < 50 && ny >= 0 && ny < 50) {
+                        //             const cost = this.matrix.get(nx, ny)
+                        //             this.matrix.set(nx, ny, Math.min(255, cost + highCost))
+                        //         }
+                        //     }
+                        // }
                         break
                     case TERRAIN_MASK_SWAMP:
                         this.matrix.set(x, y, Math.min(255, cost + swampCost))
@@ -77,7 +97,11 @@ export default class RoomMatrix extends RoomSpawnManager {
                         this.matrix.set(x, y, Math.min(255, cost + plainCost))
                         break
                 }
-            })
+            }
+        }
+
+        this.log('**matrix**: set swamp and plain costs', `cpu:${this.getLogCpu()}`)
+        this.logCpu()
 
         // Mark positions within a distance of 4 around the controller
         const controller = this.room.controller
@@ -94,21 +118,25 @@ export default class RoomMatrix extends RoomSpawnManager {
                 })
         }
 
+        this.log('**matrix**: controller ', `cpu:${this.getLogCpu()}`)
+        this.logCpu()
+
         // Mark positions around spawns
         this.spawns.forEach(s => {
             // get all positions around the target
             utils.getNeighbors(s.pos.x, s.pos.y, 1)
                 // remove out of bounds
-                .filter(([x, y]) => x >= 0 && x < 50 && y >= 0 && y < 50)
                 // ignore walls
-                .filter(([x, y]) => this.terrain.get(x, y) === TERRAIN_MASK_WALL)
-                // remap with existing cost
-                .map(([x, y]) => ({ x, y, cost: this.matrix.get(x, y) }))
+                .filter(([x, y]) => x >= 0 && x < 50 && y >= 0 && y < 50 && this.terrain.get(x, y) === TERRAIN_MASK_WALL)
                 // set new cost
-                .forEach(({ x, y, cost }) => {
+                .forEach(([x, y]) => {
+                    const cost = this.matrix.get(x, y)
                     this.matrix.set(x, y, Math.min(255, cost + highCost))
                 })
         })
+
+        this.log('**matrix**: spawns', `cpu:${this.getLogCpu()}`)
+        this.logCpu()
 
         // Mark positions around sources
         this.sources
@@ -127,6 +155,9 @@ export default class RoomMatrix extends RoomSpawnManager {
                     })
             })
 
+        this.log('**matrix**: sources', `cpu:${this.getLogCpu()}`)
+        this.logCpu()
+
         //room.find(FIND_STRUCTURES)
         this.structures
             // remap with existing cost
@@ -142,6 +173,9 @@ export default class RoomMatrix extends RoomSpawnManager {
                 }
             })
 
+        this.log('**matrix**: structures', `cpu:${this.getLogCpu()}`)
+        this.logCpu()
+
         //room.find(FIND_CONSTRUCTION_SITES)
         this.constructions
             // remap with existing cost
@@ -155,8 +189,11 @@ export default class RoomMatrix extends RoomSpawnManager {
                     this.matrix.set(x, y, 255)
                 }
             })
+
+        this.log('**matrix**: constructions', `cpu:${this.getLogCpu()}`)
     }
 
+    @cpuLog
     private buildRoomCreepMatrix(creep: Creep, options: TravelerOptions = {}): CostMatrix {
         const costMatrix = this.matrix.clone()
 
@@ -167,6 +204,29 @@ export default class RoomMatrix extends RoomSpawnManager {
         } = options
 
         if (ignoreCreeps) return costMatrix
+
+        if (!creep.manager.hasTask('harvest')) {
+            const sources: Source[] = this.getContext('sources', true)
+
+            sources.forEach(s => {
+                utils.getNeighbors(s.pos.x, s.pos.y, 1)
+                    .forEach(([x, y]) => {
+                        costMatrix.set(x, y, 200)
+                    })
+            })
+        }
+
+        // avoid enemies
+        this.enemies.forEach((c: Creep) => {
+            const canAttack = c.body.some(b => b.type === ATTACK || b.type === RANGED_ATTACK)
+
+            utils.getNeighbors(c.pos.x, c.pos.y, canAttack ? 4 : 2)
+                .forEach(([x, y]) => {
+                    const cost = costMatrix.get(x, y)
+
+                    costMatrix.set(x, y, canAttack ? 255 : 120)
+                })
+        })
 
         // find creeps that have been at the same position for awhile
         //room.find(FIND_MY_CREEPS)

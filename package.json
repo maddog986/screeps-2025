@@ -1,34 +1,28 @@
 {
-  "name": "screeps-typescript-starter",
-  "version": "3.0.0",
-  "description": "",
+  "name": "maddog986-screeps-2025",
+  "version": "1.0.0",
+  "description": "Maddog986's Screeps 2025",
   "main": "index.js",
-  "//": "If you add or change the names of destinations in screeps.json, make sure you update these scripts to reflect the changes",
+  "//": "CLU INFO: Pause: system.pauseSimulation() Resume: system.pauseSimulation() Tick Rates: system.setTickDuration(1000)",
   "scripts": {
     "lint": "eslint \"src/**/*.ts\"",
     "build": "rollup -c",
     "push-main": "rollup -c --bundleConfigAsCjs --environment DEST:main",
-    "push-pserver": "rollup -c --environment DEST:pserver",
-    "push-season": "rollup -c --environment DEST:season",
-    "push-sim": "rollup -c --environment DEST:sim",
-    "test": "npm run test-unit",
-    "test-unit": "mocha test/unit/**/*.ts",
-    "test-integration": "echo 'See docs/in-depth/testing.md for instructions on enabling integration tests'",
-    "watch-main": "rollup -cw --environment DEST:main",
-    "watch-pserver": "rollup -cw --environment DEST:pserver",
-    "watch-season": "rollup -cw --environment DEST:season",
-    "watch-sim": "rollup -cw --bundleConfigAsCjs --environment DEST:sim"
+    "push-pserver": "rollup -c --bundleConfigAsCjs --environment DEST:pserver",
+    "push-season": "rollup -c --bundleConfigAsCjs --environment DEST:season",
+    "push-sim": "rollup -c --bundleConfigAsCjs --environment DEST:sim",
+    "watch-main": "rollup -cw --bundleConfigAsCjs --environment DEST:main",
+    "watch-pserver": "rollup -cw --bundleConfigAsCjs --environment DEST:pserver",
+    "watch-season": "rollup -cw --bundleConfigAsCjs --environment DEST:season",
+    "watch-sim": "rollup -cw --bundleConfigAsCjs --environment DEST:sim",
+    "cli": "docker exec -i screeps-docker-screeps-1 npx screeps cli"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/screepers/screeps-typescript-starter.git"
+    "url": "git+https://github.com/maddog986/screeps-2025.git"
   },
-  "author": "",
+  "author": "Maddog986",
   "license": "Unlicense",
-  "bugs": {
-    "url": "https://github.com/screepers/screeps-typescript-starter/issues"
-  },
-  "homepage": "https://github.com/screepers/screeps-typescript-starter#readme",
   "engines": {
     "node": "10.x || 12.x || 16.x || 18.x"
   },

@@ -1,5 +1,13 @@
 declare global {
-    type DebugLevel = 'basic' | 'detailed'
+    interface CreepRoleConfig {
+        body: {
+            parts: BodyPartConstant[],
+            max: boolean | number
+        }
+        max: string,
+        conditions: string[],
+        tasks: TaskConfig[]
+    }
 
     interface RoomConfig {
         spawnDelay: number
@@ -10,6 +18,7 @@ declare global {
             enabled: boolean
             show_build: boolean
             show_build_levels: boolean
+            build_frequency: number
             max_constructions: number
             auto_build_roads_level: number
             auto_build_containers: number
@@ -26,12 +35,7 @@ declare global {
         target: string
     }
 
-    interface CreepRoleConfig {
-        body: BodyPartConstant[],
-        max: string,
-        conditions: string[],
-        tasks: TaskConfig[]
-    }
+
 }
 
 interface Config {
@@ -49,148 +53,32 @@ interface Config {
 }
 
 export const CONFIG: Config = {
-    debug: "detailed",                            // enable/disable debugging
+    debug: 'basic',                            // enable/disable debugging
 
     visuals: {                                 // visuals
-        enabled: true,                         // enable/disable visuals
-        show_matrix: true,                    // show pathfinding matrix
-        creep_travel: true,                    // show creep paths
+        enabled: false,                         // enable/disable visuals
+        show_matrix: false,                    // show pathfinding matrix
+        creep_travel: false,                    // show creep paths
     },
 
     rooms: {
-        sim: {                                  // room name
-            spawnDelay: 10,                     // ticks to delay between spawns
-            creeps: {
-                harvester: {                    // role
-                    body: [WORK, CARRY, CARRY, MOVE, MOVE],
-                    max: "Math.min(8, Math.max(1, sources().filter(notOverAssigned).reduce((a,b) => a + walkablePositions(b), 0) + (creeps().filter(c => usedCapacity(c) > 45).length * 2) - (creeps().filter(c => usedCapacity(c) < 20).length * 3)))",        // max number of creeps
-
-                    conditions: [
-                        // "mules.length > 0",
-                        // "upgraders.length > 0"
-                    ],
-
-                    tasks: [                    // tasks
-                        // refill spawn
-                        {
-                            action: "transfer",
-                            target: "closestSpawn()",
-                            conditions: [
-                                "usedCapacity(creep)",          // creep is full
-                                "freeCapacity(target)",          // Ensure the spawn still has free capacity
-                                "notOverAssigned(target)",      // Ensure the spawn is not over assigned
-                            ],
-                            validates: [
-                                "usedCapacity(creep)",
-                                "freeCapacity(target)", // Ensure the spawn still has free capacity
-                            ],
-                        },
-                        // refill builder
-                        {
-                            action: "transfer",
-                            target: "creepsByRole('builder').filter(freeCapacity).shift()",
-                            conditions: [
-                                "usedCapacity(creep)",          // creep is full
-                                "freeCapacity(target)",         // Ensure the spawn still has free capacity
-                                "notOverAssigned(target)",      // Ensure the spawn is not over assigned
-                            ],
-                            validates: [
-                                "usedCapacity(creep)",
-                                "freeCapacity(target)", // Ensure the spawn still has free capacity
-                            ],
-                        },
-                        // harvest source
-                        {
-                            action: "harvest",
-                            target: "closestSource()",
-                            conditions: [
-                                "freeCapacity(creep) > 0", // creep has free capacity
-                                //"notOverAssignedSource(target)"
-                            ],
-                            validates: [
-                                "target.energy > 0", // Ensure the source still has energy
-                                "freeCapacity(creep)",
-                                // "notOverAssignedSource(target)"
-                            ],
-                        },
-                        // upgrade room controller
-                        {
-                            action: "upgrade",
-                            target: "controller",
-                            conditions: [
-                                "usedCapacity(creep)",
-                                "!freeCapacity(closestSpawn())"
-                            ],// creep is full and spawn is full
-                            validates: [
-                                "usedCapacity(creep)",
-                                "spawns().filter(freeCapacity).filter(notOverAssigned).length === 0" // Ensure the spawn is full
-                            ],
-                        },
-                    ]
-                },
-                builder: {
-                    body: [WORK, CARRY, MOVE, MOVE],
-                    max: "Math.ceil(constructionSites().length/2)",
-                    conditions: [
-                        "constructionSites().length > 0"
-                    ],
-                    tasks: [
-                        // // withdraw energy from harvester
-                        // {
-                        //     conditions: [
-                        //         "freeCapacity(creep) > 0", // creep has free capacity
-                        //         // "notOverAssignedSource(target)"
-                        //     ],
-                        //     validates: [
-                        //         "freeCapacity(creep)",
-                        //         "hasCapacity(target)"
-                        //         // "notOverAssignedSource(target)"
-                        //     ],
-                        //     task: {
-                        //         action: "withdraw",
-                        //         target: "creepsByRole('harvester').filter(hasCapacity).shift()"
-                        //     }
-                        // },
-
-                        // harvest source
-                        {
-                            action: "harvest",
-                            target: "closestSource()",
-                            conditions: [
-                                "freeCapacity(creep) > 0", // creep has free capacity
-                                //"notOverAssignedSource(target)"
-                            ],
-                            validates: [
-                                "target.energy > 0", // Ensure the source still has energy
-                                "freeCapacity(creep)",
-                                // "notOverAssignedSource(target)"
-                            ],
-                        },
-                        {
-                            action: "build",
-                            target: "closestConstructionSite()",
-                            conditions: [
-                                "usedCapacity(creep) > 0",
-                                "constructionSites().length > 0"
-                            ],
-                            validates: [
-                                "usedCapacity(creep) > 0",
-                                // "constructionSites().length > 0"
-                            ],
-                        }
-                    ]
-                }
-            },
+        default: {                                  // room name
             build: {                            // building
                 enabled: true,                 // enable/disable auto building
-                show_build: true,              // show build orders
+                show_build: false,              // show build orders
                 show_build_levels: false,       // show build levels
+                build_frequency: 10,            // ticks between build orders
                 max_constructions: 3,           // max number of construction sites to place
                 auto_build_roads_level: 3.6,    // build roads at this level
-                auto_build_containers: 3.2,     // build containers at this level
+                auto_build_containers: 2.1,     // build containers at this level
                 build_orders: {                 // build orders
                     2: [
-                        '  E . EE ',
+                        '     C   ',
+                        '    A    ',
+                        '         ',
+                    ],
+                    2.3: [
+                        '  E .CEE ',
                         '   .A..  ',
                         '         ',
                     ],
@@ -201,32 +89,39 @@ export const CONFIG: Config = {
                         '         ',
                         '         ',
                     ],
-                    2.8: [
+                    2.5: [
                         '   E.E   ',
                         '  E .CEE ',
                         '  ..A..  ',
                         '    .    ',
                         '         ',
                     ],
+                    2.7: [
+                        '   E.E   ',
+                        '  E .CEE.',
+                        ' ...A... ',
+                        '    .    ',
+                        '         ',
+                    ],
                     3: [
                         '   E.ET  ',
-                        '  E .CEE ',
-                        '  ..A... ',
-                        '   C.    ',
+                        '  E .CEE.',
+                        ' ...A... ',
+                        '    .    ',
                         '         ',
                     ],
                     3.15: [
                         '   E.ET  ',
-                        ' EE .CEE ',
+                        ' EE .CEE.',
                         '  ..A... ',
-                        '  EC.  E ',
+                        '  E .  E ',
                         '         ',
                     ],
                     3.3: [
                         '   E.ET  ',
-                        ' EE .CEE ',
+                        ' EE .CEE.',
                         '  ..A... ',
-                        ' EEC. EE ',
+                        ' EE . EE ',
                         '         ',
                     ],
                     4: [
@@ -241,7 +136,119 @@ export const CONFIG: Config = {
                         '  .. ..  ',
                     ]
                 }
-            }
+            },
+            spawnDelay: 15,                     // ticks to delay between spawns
+            creeps: {
+                // defender: {
+                //     body: {
+                //         parts: [TOUGH, MOVE, ATTACK, ATTACK, MOVE, MOVE],
+                //         max: true
+                //     },
+                //     max: "enemies().length > 0 ? enemies().length : 0",
+                //     conditions: [
+                //     ],
+                //     tasks: [
+                //         // attack hostile
+                //         {
+                //             action: "attack",
+                //             target: "closestHostile()",
+                //             conditions: [],
+                //             validates: [],
+                //         },
+                //     ]
+                // },
+                harvester: {                    // role
+                    body: {
+                        parts: [WORK, CARRY, MOVE, MOVE],
+                        max: true
+                    },
+                    //  + (creeps().filter(c => usedCapacity(c) > 45).length * 2) - (creeps().filter(c => usedCapacity(c) < 20).length * 3)))
+                    max: "sources().filter(notOverAssignedTo('harvest')).reduce((a,b) => a + walkablePositions(b), 0) + containers().filter(usedCapacity).length",        // max number of creeps
+
+                    conditions: [
+                        // "mules.length > 0",
+                        // "upgraders.length > 0"
+                    ],
+
+                    tasks: [
+                        // harvest source
+                        {
+                            action: "harvest",
+                            target: "closestSource()",
+                            conditions: [],
+                            validates: [
+                                "target.energy > 0",
+                            ],
+                        },
+
+                        // upgrade room controller
+                        {
+                            action: "upgrade",
+                            target: "controller",
+                            conditions: [],
+                            validates: [],
+                        },
+                    ]
+                },
+                builder: {
+                    body: {
+                        parts: [WORK, CARRY, MOVE, MOVE],
+                        max: true
+                    },
+                    max: "Math.ceil(constructionSites().length/2)",
+                    conditions: [
+                        "constructionSites().length > 0"
+                    ],
+                    tasks: [
+
+
+                        // build construction site
+                        {
+                            action: "build",
+                            target: "closestConstructionSite()",
+                            conditions: [],
+                            validates: [],
+                        },
+
+                        // upgrade room controller
+                        {
+                            action: "upgrade",
+                            target: "controller",
+                            conditions: [],
+                            validates: [],
+                        },
+
+                        // harvest source
+                        {
+                            action: "harvest",
+                            target: "closestSource()",
+                            conditions: [],
+                            validates: [
+                                "target.energy > 0",
+                            ],
+                        },
+                    ]
+                },
+                // mule: {
+                //     body: {
+                //         parts: [CARRY, CARRY, MOVE, MOVE],
+                //         max: true
+                //     },
+                //     max: "containers().length >=2 ? 1 : 0",
+                //     conditions: [
+                //         "creepsByRole('harvester').length > 4",
+                //     ],
+                //     tasks: [
+                //         // transfer to spawn
+                //         {
+                //             action: "transfer",
+                //             target: "closestSpawn()",
+                //             conditions: [],
+                //             validates: [],
+                //         },
+                //     ]
+                // },
+            },
         }
     },
 }

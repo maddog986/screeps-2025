@@ -12,6 +12,36 @@ declare global {
     }
 }
 
+export function cpuLog<T extends (...args: any[]) => any>(target: any, key: string, descriptor: TypedPropertyDescriptor<T>): void {
+    const originalMethod = descriptor.value!
+
+    descriptor.value = function (this: any, ...args: Parameters<T>): ReturnType<T> {
+        // Serialize args for cache key (handle RoomPosition and primitives)
+        const serializedArgs = args.map(arg => {
+            if (arg instanceof RoomPosition) {
+                return `${arg.x},${arg.y},${arg.roomName}`
+            }
+            if (arg instanceof PathFinder.CostMatrix) {
+                return `costmatrix`
+            }
+            if (arg instanceof Room) {
+                return arg.name
+            }
+            if (arg instanceof RoomObject) {
+                return `${arg.pos.x},${arg.pos.y},${arg.pos.roomName}`
+            }
+            return JSON.stringify(arg)
+        })
+        const cacheKey = `${serializedArgs.join(":")}`
+
+        const startCPU = Game.cpu.getUsed()
+        const result = originalMethod.apply(this, args)
+        const endCPU = Game.cpu.getUsed()
+        this.log(`**${key}** #e7d800[used ${(endCPU - startCPU).toFixed(2)}] key:${cacheKey.slice(0, 75)}`, 'log')
+        return result
+    } as T
+}
+
 const CacheStorage: Record<string, { value: any; serialized: boolean; expires: number }> = {}
 
 Memory.cache = {}

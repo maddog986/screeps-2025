@@ -1,4 +1,5 @@
 import { CONFIG } from 'config'
+import { cpuLog } from 'utils/cache'
 import { STRUCTURE_KEY } from 'utils/RoomVisual.prototype'
 import utils from 'utils/utils'
 import '../utils/RoomVisual.prototype'
@@ -13,7 +14,7 @@ declare global {
     }
 }
 
-export default class RoomBuilder extends RoomMatrix {
+export default class RoomBuilder<TContext extends Record<string, any> = {}> extends RoomMatrix<TContext> {
     private buildable: StructurePosition[] = []
 
     constructor(room: Room) {
@@ -22,18 +23,9 @@ export default class RoomBuilder extends RoomMatrix {
         if (this.config.build.enabled) {
             this.buildable = this.processBuildableStructures()
         }
-
-        this.log(`**RoomBuilder** context loaded:`, {
-            controllerLevel: this.controllerLevel,
-            sources: this.sources.length,
-            constructionSitess: this.constructions.length,
-            allStructures: this.structures.length,
-            containers: this.containers.length,
-            spawn: this.spawn ? this.spawn.id : 'none',
-            buildable: this.buildable,
-        }, 'detailed')
     }
 
+    @cpuLog
     run() {
         super.run()
 
@@ -46,7 +38,7 @@ export default class RoomBuilder extends RoomMatrix {
             }
         }
 
-        if (this.config.build.enabled && this.buildable.length > 0) {
+        if (this.config.build.enabled && this.buildable.length > 0 && Game.time % this.config.build.build_frequency === 0) {
             this.buildStructures()
         }
     }
@@ -56,6 +48,7 @@ export default class RoomBuilder extends RoomMatrix {
      */
 
     // Parse layout into structure positions
+    @cpuLog
     private setBuildPositions(layout: string[], center: RoomPosition, level: number): StructurePosition[] {
         if (!layout.length) return []
 
@@ -82,6 +75,7 @@ export default class RoomBuilder extends RoomMatrix {
         return buildable_structures
     }
 
+    @cpuLog
     private filterPositions(buildable_structures: StructurePosition[]): StructurePosition[] {
         // remove positions that are not clear
         return buildable_structures
@@ -95,9 +89,9 @@ export default class RoomBuilder extends RoomMatrix {
         // .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure) === i)
     }
 
+    @cpuLog
     private processBuildableStructures(): StructurePosition[] {
-        const buildConfig = CONFIG.rooms[this.room.name]?.build
-        const buildOrder = buildConfig?.build_orders
+        const buildOrder = this.config.build.build_orders
         if (!buildOrder || !this.spawn) return []
 
         // this.spawns = Object.values(Game.spawns)//.filter(({ my, room }) => my && room.name === this.room.name) //.this.allStructures.filter(({ structureType }) => structureType === STRUCTURE_SPAWN) as StructureSpawn[]
@@ -116,15 +110,17 @@ export default class RoomBuilder extends RoomMatrix {
         this.sources
             .forEach((source) => {
                 // look for containers near source
-                const container_near_source = this.containers
+                const containerNearSource = this.containers
                     // get all containers near source
                     .filter(({ pos }) => source.pos.getRangeTo(pos) <= 3)
-                    // remap to structure positions
-                    .map(({ pos }) => ({ x: pos.x, y: pos.y, structure: STRUCTURE_CONTAINER, level: buildConfig.auto_build_roads_level }))
-                    // get first item
-                    .shift()
 
-                if (container_near_source) return
+                if (containerNearSource.length) return
+
+                const buildingNearSource = this.constructions
+                    // get all containers near source
+                    .filter(({ pos }) => source.pos.getRangeTo(pos) <= 3)
+
+                if (buildingNearSource.length) return
 
                 const optimalPosition = utils.findOptimalPosition(this.room, source.pos, 1)
                 if (!optimalPosition) {
@@ -143,7 +139,7 @@ export default class RoomBuilder extends RoomMatrix {
                     // get all containers near source
                     .filter(({ pos }) => utils.inRangeTo(source.pos, pos, 2))
                     // remap to structure positions
-                    .map(({ pos }) => ({ x: pos.x, y: pos.y, structure: STRUCTURE_CONTAINER, level: buildConfig.auto_build_roads_level }))
+                    .map(({ pos }) => ({ x: pos.x, y: pos.y, structure: STRUCTURE_CONTAINER, level: this.config.build.auto_build_roads_level }))
                     // get first item
                     .shift()
 
@@ -184,7 +180,7 @@ export default class RoomBuilder extends RoomMatrix {
                     })
 
                     .forEach(({ x, y }) => {
-                        buildable_structures.push({ x: x, y, structure: STRUCTURE_ROAD, level: buildConfig.auto_build_roads_level })
+                        buildable_structures.push({ x: x, y, structure: STRUCTURE_ROAD, level: this.config.build.auto_build_roads_level })
                     })
 
                 // remove container_near_source from buildable_structures
@@ -200,6 +196,7 @@ export default class RoomBuilder extends RoomMatrix {
         return this.filterPositions(buildable_structures)
     }
 
+    @cpuLog
     private displayBuildStructures() {
         if (!CONFIG.visuals.enabled || !this.buildable.length) return
 
@@ -244,6 +241,7 @@ export default class RoomBuilder extends RoomMatrix {
     private built_structures = 0
 
     // construct a structure
+    @cpuLog
     private constructStructure(structure: StructurePosition) {
         if (!this.config.build.enabled) return
 
@@ -257,6 +255,7 @@ export default class RoomBuilder extends RoomMatrix {
     }
 
     // build structures
+    @cpuLog
     private buildStructures() {
         const spawn = this.spawn
         if (!spawn) return
@@ -288,6 +287,7 @@ export default class RoomBuilder extends RoomMatrix {
     }
 
     // display the room matrix
+    @cpuLog
     private displayMatrix() {
         // lets visualize the room matrix
         const matrix = this.matrix

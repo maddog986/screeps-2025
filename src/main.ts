@@ -13,6 +13,8 @@ export const loop = () => {
 		}
 	}
 
+	let cpuStart = Game.cpu.getUsed()
+
 	// get all rooms
 	const rooms = Object.values(Game.rooms)
 
@@ -21,6 +23,9 @@ export const loop = () => {
 		room.manager.run()
 	})
 
+	console.log('All rooms cpu:', Game.cpu.getUsed() - cpuStart)
+	cpuStart = Game.cpu.getUsed()
+
 	// loop my creeps
 	const creeps = Object.values(Game.creeps)
 		.filter(c => c.my && !c.spawning)
@@ -28,6 +33,13 @@ export const loop = () => {
 	// setup tasks for creeps
 	creeps.forEach(creep => {
 		creep.manager.run()
+	})
+
+	console.log('creeps cpu:', Game.cpu.getUsed() - cpuStart)
+	cpuStart = Game.cpu.getUsed()
+
+	// setup tasks for creeps
+	creeps.forEach(creep => {
 		creep.manager.flushLogs()
 	})
 
@@ -36,26 +48,35 @@ export const loop = () => {
 		room.manager.flushLogs()
 	})
 
+
+	console.log('logs cpu:', Game.cpu.getUsed() - cpuStart)
+	cpuStart = Game.cpu.getUsed()
+
 	// // Object.values(Game.creeps).forEach(c => c.drop(RESOURCE_ENERGY))
 
-	// // end of tick extra tasks
-	// creeps
-	// 	.forEach(creep => {
-	// 		// harvester transfer whatever energy we can to another creep with less free capacity to top them off
-	// 		if (!creep.manager.completed.has('transfer') && creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
-	// 			// other creeps nearby with less free capacity
-	// 			const nearBy = creeps.filter(c =>
-	// 				c.store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
-	// 				c.store.getFreeCapacity(RESOURCE_ENERGY) < creep.store.getFreeCapacity(RESOURCE_ENERGY) &&
-	// 				c.pos.isNearTo(creep)
-	// 			)
+	// end of tick extra tasks
+	creeps
+		.forEach(creep => {
+			// harvester transfer whatever energy we can to another creep with less free capacity to top them off
+			if (!creep.manager.completed.has('transfer') && creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
+				// other creeps nearby with less free capacity
+				const nearBy = creeps.filter(c =>
+					c.store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
+					c.store.getFreeCapacity(RESOURCE_ENERGY) < creep.store.getFreeCapacity(RESOURCE_ENERGY) &&
+					c.pos.isNearTo(creep)
+				)
 
-	// 			if (nearBy.length > 0) {
-	// 				const transfer = creep.transfer(nearBy[0], RESOURCE_ENERGY)
-	// 				if (transfer === OK) {
-	// 					creep.manager.completed.add('transfer')
-	// 				}
-	// 			}
-	// 		}
-	// 	})
+				if (nearBy.length > 0) {
+					const transfer = creep.transfer(nearBy[0], RESOURCE_ENERGY)
+					if (transfer === OK) {
+						creep.manager.completed.add('transfer')
+					}
+				}
+			}
+		})
+
+	console.log('extra tasks cpu:', Game.cpu.getUsed() - cpuStart)
+	cpuStart = Game.cpu.getUsed()
+
+	console.log('total cpu:', Game.cpu.getUsed())
 }
