@@ -1,9 +1,9 @@
-import 'creep/creep_manager'
-import 'room/room_manager'
+import RoomHivemind from 'room_hivemind'
+import './prototypes'
 
 // main game loop
 export const loop = () => {
-	console.log('---------------------------------------')
+	const cpu = Game.cpu.getUsed()
 
 	// Automatically delete memory of missing creeps
 	for (const name in Memory.creeps) {
@@ -13,70 +13,11 @@ export const loop = () => {
 		}
 	}
 
-	let cpuStart = Game.cpu.getUsed()
+	for (const room in Game.rooms) {
+		new RoomHivemind(Game.rooms[room])
+	}
 
-	// get all rooms
-	const rooms = Object.values(Game.rooms)
-
-	// loop all rooms
-	rooms.forEach(room => {
-		room.manager.run()
-	})
-
-	console.log('All rooms cpu:', Game.cpu.getUsed() - cpuStart)
-	cpuStart = Game.cpu.getUsed()
-
-	// loop my creeps
-	const creeps = Object.values(Game.creeps)
-		.filter(c => c.my && !c.spawning)
-
-	// setup tasks for creeps
-	creeps.forEach(creep => {
-		creep.manager.run()
-	})
-
-	console.log('creeps cpu:', Game.cpu.getUsed() - cpuStart)
-	cpuStart = Game.cpu.getUsed()
-
-	// setup tasks for creeps
-	creeps.forEach(creep => {
-		creep.manager.flushLogs()
-	})
-
-	// loop all rooms
-	rooms.forEach(room => {
-		room.manager.flushLogs()
-	})
-
-
-	console.log('logs cpu:', Game.cpu.getUsed() - cpuStart)
-	cpuStart = Game.cpu.getUsed()
-
-	// // Object.values(Game.creeps).forEach(c => c.drop(RESOURCE_ENERGY))
-
-	// end of tick extra tasks
-	creeps
-		.forEach(creep => {
-			// harvester transfer whatever energy we can to another creep with less free capacity to top them off
-			if (!creep.manager.completed.has('transfer') && creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
-				// other creeps nearby with less free capacity
-				const nearBy = creeps.filter(c =>
-					c.store.getFreeCapacity(RESOURCE_ENERGY) > 0 &&
-					c.store.getFreeCapacity(RESOURCE_ENERGY) < creep.store.getFreeCapacity(RESOURCE_ENERGY) &&
-					c.pos.isNearTo(creep)
-				)
-
-				if (nearBy.length > 0) {
-					const transfer = creep.transfer(nearBy[0], RESOURCE_ENERGY)
-					if (transfer === OK) {
-						creep.manager.completed.add('transfer')
-					}
-				}
-			}
-		})
-
-	console.log('extra tasks cpu:', Game.cpu.getUsed() - cpuStart)
-	cpuStart = Game.cpu.getUsed()
-
-	console.log('total cpu:', Game.cpu.getUsed())
+	console.log(`<div style="padding: 1rem;background-color: #171717;border-radius: 1rem;margin: 0 0 0.5rem 0;min-width: 600px;letter-spacing:-0.04em;line-height:1.2;">` +
+		`<div style="font-size: 1.8rem;font-weight: bold;color: #fff;"><strong>${Game.time}</strong> cpu: ${(Game.cpu.getUsed() - cpu).toFixed(2)}</div>` +
+		`</div>`)
 }
