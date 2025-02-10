@@ -1,19 +1,14 @@
 declare global {
     interface RoomConfig {
-        debug: {
-            enabled: boolean
-            keys: DebugConfig[]
-        }
-        maxUpgraders: number
-        maxBuilders: number
-        build: {
-            enabled: boolean
+        debug?: DebugConfig[]
+        build?: {
             show_build: boolean
             show_build_levels: boolean
             build_frequency: number
             max_constructions: number
             auto_build_roads_level: number
             auto_build_containers: number
+            spawnPos: { x: number, y: number }
             build_orders: {
                 [key: number]: string[]
             }
@@ -27,7 +22,7 @@ declare global {
         target: string
     }
 
-    type DebugConfig = 'manageSpawns' | 'manageTowers' | 'manageCreeps' | 'manageConstruction' | 'manageRefillables' | 'manageRoles'
+    type DebugConfig = 'manageSpawns' | 'manageTowers' | 'manageCreeps' | 'manageConstruction' | 'manageRoles' | 'manageLinks'
 
     interface Config {
         visuals: {
@@ -44,6 +39,46 @@ declare global {
     }
 }
 
+const bunker1 = {                // build orders
+    2: [
+        '     C   ',
+        '    A    ',
+        '         ',
+    ],
+    2.1: [
+        ' EE  CEE ',
+        '    A    ',
+        '       E ', // 5 extensions max
+    ],
+    3: [
+        ' EEE ETE ',
+        ' EE  CEE ',
+        '    A    ',
+        '       E ',
+        '         ', // 10 extensions max
+    ],
+    4: [
+        '  EE EE  ',
+        ' EEE ETE ',
+        ' EE  CEE ',
+        '    A    ',
+        ' EEC  EE ',
+        ' E E E   ',
+        '         ', // 20 extensions max
+    ],
+    5: [
+        '  .. ..  ',
+        ' .EE.EE. ',
+        '.EEE.ETE.',
+        '.EE .CEE.',
+        ' ...A... ',
+        '.EEC. EE.',
+        '.ETE.EEE.',
+        ' .EE.EE. ',
+        '  .. ..  ',
+    ]
+}
+
 export const CONFIG: Config = {
     visuals: {                                 // visuals
         enabled: true,                         // enable/disable visuals
@@ -54,212 +89,56 @@ export const CONFIG: Config = {
     },
 
     rooms: {
-        W7N3: {                             // room name
-            debug: {
-                enabled: true,
-                keys: ['manageRoles']
-            },
-            maxUpgraders: 4,                   // max number of upgraders
-            maxBuilders: 2,                    // max number of builders
-            build: {                           // building
-                enabled: true,                 // enable/disable auto building
-                show_build: true,             // show build orders
-                show_build_levels: false,      // show build levels
-                build_frequency: 50,           // ticks between build orders
-                max_constructions: 3,          // max number of construction sites to place
-                auto_build_roads_level: 0,     // build roads at this level
-                auto_build_containers: 0,      // build containers at this level
-                build_orders: {                // build orders
-                    2: [
-                        '     C   ',
-                        '    A    ',
-                        '         ',
-                    ],
-                    2.05: [
-                        '  E  CEE ',
-                        '    A    ',
-                        '         ',
-                    ],
-                    2.1: [
-                        '   E E   ',
-                        '  E  CEE ',
-                        '    A    ',
-                        '         ',
-                        '         ',
-                    ],
-                    3: [
-                        '   E ET  ',
-                        '  E  CEE ',
-                        '    A    ',
-                        '         ',
-                        '         ',
-                    ],
-                    3.05: [
-                        '   E ET  ',
-                        ' EE  CEE ',
-                        '    A    ',
-                        '  E   E  ',
-                        '         ',
-                    ],
-                    3.2: [
-                        '   E ET  ',
-                        ' EE  CEE ',
-                        '    A    ',
-                        ' EE   EE ',
-                        '         ',
-                    ],
-                    3.4: [
-                        '  RR RR  ',
-                        ' RRRRRRR ',
-                        '   RRR   ',
-                        '   RRRRR ',
-                    ],
-                    4: [
-                        '  .. ..  ',
-                        ' .  .  . ',
-                        '.EEE.ETE.',
-                        '.EE .CEE.',
-                        ' ...A... ',
-                        '.EEC. EE.',
-                        '.E E.EEE.',
-                        ' .E .  . ',
-                        '  .. ..  ',
-                    ],
-                    5: [
-                        '  .. ..  ',
-                        ' .EE.EE. ',
-                        '.EEE.ETE.',
-                        '.EE .CEE.',
-                        ' ...A... ',
-                        '.EEC. EE.',
-                        '.ETE.EEE.',
-                        ' .EE.EE. ',
-                        '  .. ..  ',
-                    ]
-                }
-            }
-        },
-        W4N3: {                             // room name
-            debug: {
-                enabled: false,
-                keys: []
-            },
-            maxUpgraders: 4,                   // max number of upgraders
-            maxBuilders: 2,                    // max number of builders
-            build: {                           // building
-                enabled: false,                 // enable/disable auto building
-                show_build: true,             // show build orders
-                show_build_levels: false,      // show build levels
-                build_frequency: 50,           // ticks between build orders
-                max_constructions: 3,          // max number of construction sites to place
-                auto_build_roads_level: 0,     // build roads at this level
-                auto_build_containers: 0,      // build containers at this level
-                build_orders: {                // build orders
-                }
-            }
-        },
-        W5N3: {                             // room name
-            debug: {
-                enabled: false,
-                keys: []
-            },
-            maxUpgraders: 4,                   // max number of upgraders
-            maxBuilders: 2,                    // max number of builders
-            build: {                           // building
-                enabled: false,                 // enable/disable auto building
-                show_build: true,             // show build orders
-                show_build_levels: false,      // show build levels
-                build_frequency: 50,           // ticks between build orders
-                max_constructions: 3,          // max number of construction sites to place
-                auto_build_roads_level: 0,     // build roads at this level
-                auto_build_containers: 0,      // build containers at this level
-                build_orders: {                // build orders
-                }
-            }
-        },
         default: {                             // room name
-            debug: {
-                enabled: false,
-                keys: ['manageCreeps', 'manageRoles'] //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction', 'manageRefillables']
-            },
-            maxUpgraders: 4,                   // max number of upgraders
-            maxBuilders: 2,                    // max number of builders
+            debug: ['manageCreeps'], //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction']
             build: {                           // building
-                enabled: false,                 // enable/disable auto building
                 show_build: false,             // show build orders
                 show_build_levels: false,      // show build levels
-                build_frequency: 50,           // ticks between build orders
+                build_frequency: 20,           // ticks between build orders
                 max_constructions: 3,          // max number of construction sites to place
                 auto_build_roads_level: 4,     // build roads at this level
-                auto_build_containers: 0,      // build containers at this level
-                build_orders: {                // build orders
-                    2: [
-                        '     C   ',
-                        '    A    ',
-                        '         ',
-                    ],
-                    2.05: [
-                        '  E  CEE ',
-                        '    A    ',
-                        '         ',
-                    ],
-                    2.1: [
-                        '   E E   ',
-                        '  E  CEE ',
-                        '    A    ',
-                        '         ',
-                        '         ',
-                    ],
-                    3: [
-                        '   E ET  ',
-                        '  E  CEE ',
-                        '    A    ',
-                        '         ',
-                        '         ',
-                    ],
-                    3.05: [
-                        '   E ET  ',
-                        ' EE  CEE ',
-                        '    A    ',
-                        '  E   E  ',
-                        '         ',
-                    ],
-                    3.2: [
-                        '   E ET  ',
-                        ' EE  CEE ',
-                        '    A    ',
-                        ' EE   EE ',
-                        '         ',
-                    ],
-                    3.4: [
-                        '  RR RR  ',
-                        ' RRRRRRR ',
-                        '   RRR   ',
-                        '   RRRRR ',
-                    ],
-                    4: [
-                        '  .. ..  ',
-                        ' .  .  . ',
-                        '.EEE.ETE.',
-                        '.EE .CEE.',
-                        ' ...A... ',
-                        '.EEC. EE.',
-                        '.E E.EEE.',
-                        ' .E .  . ',
-                        '  .. ..  ',
-                    ],
-                    5: [
-                        '  .. ..  ',
-                        ' .EE.EE. ',
-                        '.EEE.ETE.',
-                        '.EE .CEE.',
-                        ' ...A... ',
-                        '.EEC. EE.',
-                        '.ETE.EEE.',
-                        ' .EE.EE. ',
-                        '  .. ..  ',
-                    ]
-                }
+                auto_build_containers: 1,      // build containers at this level
+                spawnPos: { x: 25, y: 25 },
+                build_orders: bunker1
+            }
+        },
+        W8N3: {                             // room name
+            debug: ['manageCreeps'], //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction']
+            build: {                           // building
+                show_build: false,             // show build orders
+                show_build_levels: false,      // show build levels
+                build_frequency: 20,           // ticks between build orders
+                max_constructions: 3,          // max number of construction sites to place
+                auto_build_roads_level: 4,     // build roads at this level
+                auto_build_containers: 1,      // build containers at this level
+                spawnPos: { x: 18, y: 16 },
+                build_orders: bunker1
+            }
+        },
+        W7N3: {                             // room name
+            //debug: [], //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction']
+            build: {                           // building
+                show_build: false,             // show build orders
+                show_build_levels: false,      // show build levels
+                build_frequency: 20,           // ticks between build orders
+                max_constructions: 3,          // max number of construction sites to place
+                auto_build_roads_level: 4,     // build roads at this level
+                auto_build_containers: 1,      // build containers at this level
+                spawnPos: { x: 33, y: 10 },
+                build_orders: bunker1
+            }
+        },
+        W7N4: {                             // room name
+            //debug: [], //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction']
+            build: {                           // building
+                show_build: false,             // show build orders
+                show_build_levels: false,      // show build levels
+                build_frequency: 20,           // ticks between build orders
+                max_constructions: 3,          // max number of construction sites to place
+                auto_build_roads_level: 4,     // build roads at this level
+                auto_build_containers: 1,      // build containers at this level
+                spawnPos: { x: 35, y: 28 },
+                build_orders: bunker1
             }
         }
     }

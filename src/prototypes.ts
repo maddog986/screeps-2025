@@ -1,8 +1,15 @@
+import CreepManager from 'creep_manager'
+import RoomHivemind from 'room_hivemind'
+
+const rangeCache: { [key: string]: number } = {}
+const nearCache: { [key: string]: boolean } = {}
+const equalCache: { [key: string]: boolean } = {}
+
 declare global {
     interface RoomPosition {
-        _rangeCache: { [key: string]: number }
-        _nearCache: { [key: string]: boolean }
-        _equalCache: { [key: string]: boolean }
+        // _rangeCache: { [key: string]: number }
+        // _nearCache: { [key: string]: boolean }
+        // _equalCache: { [key: string]: boolean }
 
         getRangeToCached: (target: RoomPosition) => number
         isNearToCached: (target: RoomPosition) => boolean
@@ -22,7 +29,9 @@ declare global {
         getTaskCount: () => number
         tasks: (TaskObject | TaskPosition)[]
         role: string
-        workPower: number
+        _manager: CreepManager
+        manager: CreepManager
+        workPower: (action: string) => number
     }
 
     interface Source {
@@ -36,10 +45,20 @@ declare global {
 
     interface Room {
         repairThreshold: number
+        _manager: RoomHivemind
+        manager: RoomHivemind
     }
 }
 
 export { }
+
+// manager
+Object.defineProperty(Room.prototype, 'manager', {
+    get: function () {
+        if (!this._manager) this._manager = new RoomHivemind(this)
+        return this._manager
+    }
+})
 
 Object.defineProperty(Room.prototype, 'repairThreshold', {
     get: function () {
@@ -52,48 +71,109 @@ Object.defineProperty(Room.prototype, 'repairThreshold', {
     }
 })
 
+// isNearSpawn
+Object.defineProperty(RoomPosition.prototype, 'isNearSpawn', {
+    get: function () {
+        return this.room.manager.isNearSpawn(this)
+    }
+})
+
+// isNearController
+Object.defineProperty(RoomPosition.prototype, 'isNearController', {
+    get: function () {
+        return this.room.manager.isNearController(this)
+    }
+})
+
+// isNearSource
+Object.defineProperty(RoomPosition.prototype, 'isNearSource', {
+    get: function () {
+        return this.room.manager.isNearSource(this)
+    }
+})
+
+
+
+
+
 // Add RoomPosition.getRangeToCached to include caching
 RoomPosition.prototype.getRangeToCached = function (target: RoomPosition): number {
-    if (!this._rangeCache) {
-        this._rangeCache = {}
+    const cacheKey = `${this.x},${this.y}-${target.x},${target.y}-${target.roomName}`
+    if (rangeCache[cacheKey] === undefined) {
+        rangeCache[cacheKey] = this.getRangeTo(target)
     }
-
-    const cacheKey = `${this.x},${this.y}-${target.x},${target.y}`
-    if (this._rangeCache[cacheKey] === undefined) {
-        this._rangeCache[cacheKey] = this.getRangeTo(target)
-    }
-    return this._rangeCache[cacheKey]
+    return rangeCache[cacheKey]
 }
 
 // Add RoomPosition.isNearToCached to include caching
 RoomPosition.prototype.isNearToCached = function (target: RoomPosition): boolean {
-    if (!this._nearCache) {
-        this._nearCache = {}
+    const cacheKey = `${this.x},${this.y}-${target.x},${target.y}-${target.roomName}`
+    if (nearCache[cacheKey] === undefined) {
+        nearCache[cacheKey] = this.isNearTo(target)
     }
-
-    const cacheKey = `${this.x},${this.y}-${target.x},${target.y}`
-    if (this._nearCache[cacheKey] === undefined) {
-        this._nearCache[cacheKey] = this.isNearTo(target)
-    }
-    return this._nearCache[cacheKey]
+    return nearCache[cacheKey]
 }
 
 // Add RoomPosition.isEqualToCached to include caching
 RoomPosition.prototype.isEqualToCached = function (target: RoomPosition): boolean {
-    if (!this._equalCache) {
-        this._equalCache = {}
+    const cacheKey = `${this.x},${this.y}-${target.x},${target.y}-${target.roomName}`
+    if (equalCache[cacheKey] === undefined) {
+        equalCache[cacheKey] = this.isEqualTo(target)
     }
-
-    const cacheKey = `${this.x},${this.y}-${target.x},${target.y}`
-    if (this._equalCache[cacheKey] === undefined) {
-        this._equalCache[cacheKey] = this.isEqualTo(target)
-    }
-    return this._equalCache[cacheKey]
+    return equalCache[cacheKey]
 }
 
 RoomPosition.prototype.inRangeToCached = function (target: RoomPosition, range: number): boolean {
     return this.getRangeToCached(target) <= range
 }
+
+Object.defineProperty(Source.prototype, 'walkablePositions', {
+    get: function () {
+        this.room.memory.walkablePositions ??= {}
+
+        if (this.room.memory.walkablePositions[this.id] === undefined) {
+            this.room.memory.walkablePositions[this.id] = this.room
+                .lookAtArea(this.pos.y - 1, this.pos.x - 1, this.pos.y + 1, this.pos.x + 1, true)
+                .filter((result: LookAtResult) => result.terrain === 'swamp' || result.terrain === 'plain')
+                .length
+        }
+
+        return this.room.memory.walkablePositions[this.id]
+    }
+})
+
+
+
+
+
+
+
+
+
+
+
+Object.defineProperty(Creep.prototype, 'manager', {
+    get: function () {
+        this._manager ??= new CreepManager(this)
+        return this._manager
+    }
+})
+
+Object.defineProperty(Creep.prototype, 'tasks', {
+    get: function () {
+        this.memory.tasks ??= []
+        return this.memory.tasks
+    },
+    set: function (value: (TaskObject | TaskPosition)[]) {
+        this.memory.tasks = value
+    }
+})
+
+Object.defineProperty(Creep.prototype, 'role', {
+    get: function () {
+        return this.memory.role
+    }
+})
 
 Creep.prototype.addTask = function (task: TaskObject | TaskPosition, atFront?: boolean) {
     if (this.tasks.some(t => {
@@ -111,6 +191,8 @@ Creep.prototype.addTask = function (task: TaskObject | TaskPosition, atFront?: b
     } else {
         this.tasks.push(task)
     }
+
+    this.room.manager.creepsByTask[task.action].push(this)
 
     return true
 }
@@ -147,48 +229,6 @@ Creep.prototype.getTaskCount = function () {
     return this.tasks.length
 }
 
-Object.defineProperty(Creep.prototype, 'tasks', {
-    get: function () {
-        this.memory.tasks ??= []
-        return this.memory.tasks
-    },
-    set: function (value: (TaskObject | TaskPosition)[]) {
-        this.memory.tasks = value
-    }
-})
-
-Object.defineProperty(Creep.prototype, 'role', {
-    get: function () {
-        return this.memory.role
-    }
-})
-
-Object.defineProperty(Creep.prototype, 'workPower', {
-    get: function () {
-        const workParts = this.body.filter((b: BodyPartDefinition) => b.type === WORK).length
-
-        if (this.role === 'harvester') return workParts * HARVEST_POWER
-        if (this.role === 'upgrader') return workParts * UPGRADE_CONTROLLER_POWER
-        if (this.role === 'builder') return workParts * BUILD_POWER
-        if (this.role === 'repairer') return workParts * REPAIR_POWER
-        if (this.role === 'attacker') return workParts * ATTACK_POWER
-        if (this.role === 'ranger') return workParts * RANGED_ATTACK_POWER
-
-        return workParts
-    }
-})
-
-Object.defineProperty(Source.prototype, 'walkablePositions', {
-    get: function () {
-        this.room.memory.walkablePositions ??= {}
-
-        if (this.room.memory.walkablePositions[this.id] === undefined) {
-            this.room.memory.walkablePositions[this.id] = this.room
-                .lookAtArea(this.pos.y - 1, this.pos.x - 1, this.pos.y + 1, this.pos.x + 1, true)
-                .filter((result: LookAtResult) => result.terrain === 'swamp' || result.terrain === 'plain')
-                .length
-        }
-
-        return this.room.memory.walkablePositions[this.id]
-    }
-})
+Creep.prototype.workPower = function (action: string) {
+    return this.manager.workPower(action)
+}

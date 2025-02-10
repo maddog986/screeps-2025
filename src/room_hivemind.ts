@@ -1,8 +1,8 @@
 import { CONFIG } from 'config'
 import { get } from 'http'
 
-const TASK_ACTIONS = ['harvest', 'transfer', 'upgrade', 'renew', 'recycle', 'build', 'withdraw', 'pickup', 'repair', 'attack', 'move', 'scout', 'claim'] as const
-const CREEP_ROLES = ['harvester', 'upgrader', 'mule', 'defender', 'builder', 'scout', 'claimer'] as const
+export const TASK_ACTIONS = ['harvest', 'transfer', 'upgrade', 'renew', 'recycle', 'build', 'withdraw', 'pickup', 'repair', 'attack', 'move', 'scout', 'claim'] as const
+export const CREEP_ROLES = ['harvester', 'upgrader', 'mule', 'defender', 'builder', 'scout', 'claimer'] as const
 
 declare global { // using global declaration to extend the existing types
     type TaskAction = (typeof TASK_ACTIONS)[number]
@@ -49,11 +49,12 @@ declare global { // using global declaration to extend the existing types
         tasks?: TaskType[]
         role: CreepRole
         room: string
+        squad?: string
     }
 
     interface RoomMemory {
         buildables: StructurePosition[]
-        lastVisited: number
+        lastSeen: number
         sources: string[]
         enemies: {
             id: string
@@ -63,6 +64,7 @@ declare global { // using global declaration to extend the existing types
         }[]
         sourceWalkablePositionsTotal: number
         owner: string
+        threatLevel: number
     }
 }
 
@@ -133,11 +135,11 @@ class RoomHivemind {
     extensions: StructureExtension[] = []
     myStructures: AnyStructure[] = []
     needsRepair: AnyStructure[] = []
-    refillables: (StructureTower | StructureExtension | StructureSpawn | StructureContainer)[] = []
-    reservedContainers: StructureContainer[] = []
+    refillables: (Structure)[] = []
     sourceWalkablePositionsTotal: number = 0
     sources: Source[] = []
     sourcesActive: Source[] = []
+    remoteSources: Source[] = []
     spawns: StructureSpawn[] = []
     structures: AnyStructure[] = []
     tombstones: Tombstone[] = []
@@ -146,32 +148,45 @@ class RoomHivemind {
     flags: Flag[] = []
     refillableHistory: number[] = []
     spawn: StructureSpawn | undefined
-    containersUsedCapacity: number = 0
     containersFreeCapacity: number = 0
     containersCapacity: number = 0
-    roomEnergyPercentage: number = 0
+    hostileStructures: StructureTower[] = []
+    threatLevel: number = 0
+    links: StructureLink[] = []
+    linksNearSpawns: StructureLink[] = []
+    linksNearController: StructureLink[] = []
+    linksNearSources: StructureLink[] = []
+    helpRooms: string[] = []
+    wanted: boolean = false
 
     constructor(public room: Room) {
+        this.wanted = room.name in CONFIG.rooms || room.name === 'sim'
         this.room = room
         this.config = CONFIG?.rooms[room.name] ?? CONFIG.rooms.default
 
-        // base information
+        this.enemies = room.find(FIND_HOSTILE_CREEPS)
+        this.sources = room.find(FIND_SOURCES)
+
         this.controller = room.controller as StructureController
         this.controllerLevel = this.controller ? (this.controller.level + this.controller.progress / this.controller.progressTotal) : 0
-        this.creeps = Object.values(Game.creeps).filter(c => c.memory.room === room.name)
         this.energyAvailable = room.energyAvailable
         this.energyCapacityAvailable = room.energyCapacityAvailable
-        this.enemies = room.find(FIND_HOSTILE_CREEPS)
-        this.flags = room.find(FIND_FLAGS)
-        this.structures = room.find(FIND_STRUCTURES)
-        this.sources = room.find(FIND_SOURCES)
         this.sourcesActive = this.sources.filter((source) => source.energy > 0)
         this.sourceWalkablePositionsTotal = this.sourcesActive.reduce((acc, source) => acc + Math.min(3, source.walkablePositions), 0)
 
+        this.creeps = Object.values(Game.creeps).filter(c => c.memory.room === room.name)
+        this.creepsByRole = CREEP_ROLES.reduce((acc, role) => {
+            acc[role] = this.creeps.filter((c) => c.role === role)
+            return acc
+        }, {} as Record<string, Creep[]>)
 
+        this.creepsByTask = TASK_ACTIONS.reduce((acc, task) => {
+            acc[task] = this.creeps.filter(c => c.hasTaskByAction(task))
+            return acc
+        }, {} as Record<TaskAction, Creep[]>)
 
         // room memory
-        room.memory.lastVisited = Game.time
+        room.memory.lastSeen = Game.time
         room.memory.sources = this.sources.map(s => s.id)
         room.memory.enemies = this.enemies.map(e => ({
             id: e.id,
@@ -181,144 +196,298 @@ class RoomHivemind {
         }))
         room.memory.sourceWalkablePositionsTotal = this.sourceWalkablePositionsTotal
         room.memory.owner = this.room.controller?.owner?.username ?? ''
+        room.memory.threatLevel = this.getThreatLevel()
 
+        this.threatLevel = room.memory.threatLevel
 
+        if (this.wanted) {
+            this.flags = this.room.find(FIND_FLAGS)
+            this.structures = this.room.find(FIND_STRUCTURES)
+            this.constructionSites = this.room.find(FIND_MY_CONSTRUCTION_SITES)
 
-        // creeps
-        this.creepsByRole = CREEP_ROLES.reduce((acc, role) => {
-            acc[role] = this.creeps.filter((c) => c.role === role)
-            return acc
-        }, {} as Record<string, Creep[]>)
-        this.creepsByTask = TASK_ACTIONS.reduce((acc, task) => {
-            acc[task] = this.creeps.filter(c => c.hasTaskByAction(task))
-            return acc
-        }, {} as Record<TaskAction, Creep[]>)
+            for (const structure of this.structures) {
+                if (structure.structureType === STRUCTURE_TOWER) {
+                    if (structure.my === true) {
+                        this.towers.push(structure)
+                    } else {
+                        this.hostileStructures.push(structure)
+                    }
+                }
+                if (structure.structureType === STRUCTURE_EXTENSION && structure.my === true) {
+                    this.extensions.push(structure)
+                }
+                if (structure.structureType === STRUCTURE_SPAWN && structure.my === true) {
+                    this.spawns.push(structure)
+                    this.spawn = structure
+                }
+                if (structure.structureType === STRUCTURE_CONTAINER) {
+                    this.containers.push(structure)
+                    if (structure.pos.getRangeToCached(this.controller!.pos) <= 7) {
+                        this.containersNearController.push(structure)
+                    }
+                    if (structure.pos.getRangeToCached(this.spawn!.pos) <= 3) {
+                        this.containersNearSpawns.push(structure)
+                    }
+                    if (structure.pos.getRangeToCached(this.sources[0].pos) <= 2) {
+                        this.containersNearSources.push(structure)
+                    }
+                }
+                if (structure.structureType === STRUCTURE_LINK && structure.my === true) {
+                    this.links.push(structure)
+                    if (structure.pos.getRangeToCached(this.controller!.pos) <= 6) {
+                        this.linksNearController.push(structure)
+                    }
+                    if (structure.pos.getRangeToCached(this.spawn!.pos) <= 4) {
+                        this.linksNearSpawns.push(structure)
+                    }
+                    if (structure.pos.getRangeToCached(this.sources[0].pos) <= 4) {
+                        this.linksNearSources.push(structure)
+                    }
+                }
+                if ('my' in structure && structure.my === true) {
+                    this.myStructures.push(structure)
+                }
+                if (structure.hits / structure.hitsMax < this.room.repairThreshold || structure.hitsMax <= 5000 && structure.hits !== structure.hitsMax) {
+                    this.needsRepair.push(structure)
+                }
+                if ('store' in structure && structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
+                    this.refillables.push(structure)
+                }
+            }
+
+            console.log('sources:', this.sources.map(s => s.id))
+        }
 
         // owned room data
         if (this.controller && this.controller.my) {
-            this.constructionSites = room.find(FIND_MY_CONSTRUCTION_SITES)
+            this.tombstones = this.room.find(FIND_TOMBSTONES)
+            this.droppedResources = this.room.find(FIND_DROPPED_RESOURCES)
 
-            // containers
-            this.containers = this.structures.filter((structure) => structure.structureType === STRUCTURE_CONTAINER)
-            this.containersNearSources = this.containers.filter((container) => this.sources.some((source) => source.pos.isNearToCached(container.pos)))
-
-            this.containersUsedCapacity = this.containers.reduce((acc, container) => acc + this.usedCapacity(container), 0)
-            this.containersFreeCapacity = this.containers.reduce((acc, container) => acc + this.freeCapacity(container), 0)
-            this.containersCapacity = this.containers.reduce((acc, container) => acc + this.getCapacity(container), 0)
-
-            this.roomEnergyPercentage = (this.energyAvailable + this.containersUsedCapacity) / (this.energyCapacityAvailable + this.containersCapacity)
-
-            this.tombstones = room.find(FIND_TOMBSTONES)
-            this.droppedResources = room.find(FIND_DROPPED_RESOURCES)
-
-            // structures
-            this.myStructures = this.structures.filter((structure) => 'my' in structure)
-            this.spawns = this.myStructures.filter((structure) => structure.structureType === STRUCTURE_SPAWN)
-            this.spawn = this.spawns[0]
-            this.extensions = this.myStructures.filter((structure) => structure.structureType === STRUCTURE_EXTENSION)
-            this.towers = this.myStructures.filter((structure) => structure.structureType === STRUCTURE_TOWER)
-            this.needsRepair = this.structures
-                .filter((structure) => structure.hits / structure.hitsMax < this.room.repairThreshold || structure.hitsMax <= 5000 && structure.hits !== structure.hitsMax)
-                .sort((a, b) => a.hits - b.hits)
-
-            // containers
-            this.containersNearSpawns = this.containers.filter((container) => this.spawns.some((spawn) => spawn.pos.isNearToCached(container.pos)))
-            this.containersNearController = this.containers.filter((container) => this.controller!.pos.getRangeToCached(container.pos) <= 6)
-            this.reservedContainers = this.energyAvailable === this.energyCapacityAvailable ? this.containersNearSpawns : [] // only reserve containers if energy is full
-
-            this.refillables = [
-                ...this.spawns,
-                ...this.extensions,
-                ...this.towers,
-                ...this.containersNearSpawns,
-                ...this.containersNearController
-            ]
-
-            this.manageSpawns()             // spawn creeps
+            this.manageCreepsSetup()
             this.manageTowers()             // attack enemies
             this.manageBuilding()           // calculate buildables
             this.manageRepairThreshold()    // adjust repair threshold
-            this.manageVisuals()                // visualize
+            this.manageLinks()              // manage links
+            this.manageVisuals()            // visualize
+            this.manageNewClaim()           // manage new claim
+            this.manageSpawns()             // spawn creeps
 
-            // find lost creeps
-            Object.values(Game.creeps).forEach(creep => {
-                if (creep.room.name !== this.room.name && creep.memory.room === this.room.name && (!creep.memory.tasks || !creep.memory.tasks.length)) {
-                    creep.memory.tasks = []
-                    creep.addTask({
-                        action: 'move',
-                        pos: {
-                            x: 25,
-                            y: 25,
-                            roomName: this.room.name,
-                            range: 48
-                        }
-                    } as TaskPosition)
-                }
-            })
-
-            if (this.enemies.length || this.room.name === 'W7N3') {
-                this.manageDefenders()
-            }
-
-            // start of new room
-            if (this.constructionSites.some(cs => cs.structureType === STRUCTURE_SPAWN) && !this.enemies.length) {
-                const constructionSpawn = this.constructionSites.find(cs => cs.structureType === STRUCTURE_SPAWN)
-
-                if (this.creeps.length < 4 && constructionSpawn) {
-                    this.log('manageCreeps', `  - **new room:** ${this.room.name}`)
-
-                    // lets steal a creep from another room
-                    const harvesterWithMostLife = Object.values(Game.creeps)
-                        .filter(c => c.role === 'harvester' && c.memory.room !== this.room.name)
-                        .sort((a, b) => a.hits - b.hits)
-                        .shift()
-
-                    if (harvesterWithMostLife) {
-                        this.log('manageCreeps', `  - **stealing creep:** ${harvesterWithMostLife.name} from ${harvesterWithMostLife.memory.room}`)
-                        harvesterWithMostLife.memory.room = this.room.name
-                        harvesterWithMostLife.say('🔄')
-
-                        harvesterWithMostLife.tasks = []
-                        harvesterWithMostLife.addTask({
-                            action: 'move',
-                            pos: {
-                                x: constructionSpawn.pos.x,
-                                y: constructionSpawn.pos.y,
-                                roomName: this.room.name,
-                                range: 48
-                            }
-                        } as TaskPosition)
-                    }
-                }
-            }
         }
 
         this.manageCreeps()                 // manage creeps
-        this.flushLogs()                    // flush logs
     }
 
-    private usedCapacity(target: TargetTypes | undefined) {
+    maxBodyParts(bodyParts: BodyPartConstant[], limit: number = 800): BodyPartConstant[] {
+        const cost = (bodyParts: BodyPartConstant[]) => bodyParts.reduce((sum, part) => sum + BODYPART_COST[part], 0)
+        let body = [...bodyParts]
+
+        while (cost(body.concat(bodyParts)) <= Math.min(limit, this.energyCapacityAvailable)) {
+            body = body.concat(bodyParts)
+        }
+
+        return body
+    }
+
+    private manageCreepsSetup() {
+        this.creepsSetup.harvester = {
+            body: this.buildCreepBody(900, { move: 3, work: 1, carry: 2 }, HARVEST_POWER, 12),
+            max: 0
+        }
+
+        this.creepsSetup.mule = {
+            body: this.buildCreepBody(600, { move: 1, carry: 2 }),
+            max: 0
+        }
+
+        this.creepsSetup.upgrader = {
+            body: this.buildCreepBody(1200, { move: 2, work: 2, carry: 1 }, UPGRADE_CONTROLLER_POWER, 12),
+            max: 0
+        }
+
+        this.creepsSetup.builder = {
+            body: this.buildCreepBody(300, { move: 3, work: 1, carry: 1 }, BUILD_POWER, 4),
+            max: 0
+        }
+
+        this.creepsSetup.harvester.max += 1 // this.sourceWalkablePositionsTotal
+
+        //this.creepsSetup.mule.max += this.containersNearSources.length >= 1 ? 1 : 0
+        //this.creepsSetup.mule.max += this.containersNearSpawns.length >= 1 ? 1 : 0
+        //this.creepsSetup.mule.max += this.containersNearController.length >= 1 ? 1 : 0
+
+        //this.creepsSetup.upgrader.max += this.controllerLevel >= 2.1 ? 1 : 0
+
+        //this.creepsSetup.builder.max += this.containers.length > 0 && this.constructionSites.length >= 1 ? 1 : 0
+
+        if (this.config.debug) this.log('manageRoles', `\n#5aff6f[##manageRoles##]`, this.creepsSetup)
+    }
+
+    private manageNewClaim() {
+        if (this.controllerLevel < 4 || this.threatLevel > 0) return
+
+        // helps newly claimed rooms construct spawn by sending harvesters
+        this.helpRooms = Object.entries(CONFIG.rooms).filter(([roomName, room]) => {
+            if (roomName === 'default') return false
+            return true
+        })
+            .map(([roomName]) => roomName)
+            // sort rooms by distance to current room
+            .sort((a, b) => {
+                const distA = Game.map.getRoomLinearDistance(this.room.name, a)
+                const distB = Game.map.getRoomLinearDistance(this.room.name, b)
+                return distA - distB
+            })
+
+        if (!this.helpRooms.length) return
+
+        this.helpRooms.forEach(roomName => {
+            const room = Game.rooms[roomName]
+            if (!room) return
+
+            const newRoomThreatLevel = room.manager.getThreatLevel()
+
+            // help construct spawn by sending harvesters
+            if (newRoomThreatLevel === 0) {
+                const doWeOwnIt = room.controller && room.controller.my
+
+                if (!doWeOwnIt) {
+                    // get sources from remote room
+                    this.remoteSources = room.manager.sources
+                    console.log('remoteSources:', this.remoteSources.map(s => s.id))
+                }
+
+                if (doWeOwnIt && room.manager.constructionSites.some(cs => cs.structureType === STRUCTURE_SPAWN)) {
+                    // spawn more harvesters
+                    this.creepsSetup.harvester.max += 2
+
+                    // can this room spare a harvester?
+                    const canSpareHarvester = this.creepsByRole.harvester.length < this.sourceWalkablePositionsTotal * 0.4
+                    const roomHasMaxHarvesters = room.manager.creepsByRole?.harvester?.length >= room.manager.sourceWalkablePositionsTotal
+
+                    if (canSpareHarvester && !roomHasMaxHarvesters) {
+                        const harvester = room.manager.creepsByRole.harvester
+                            // sort by used capacity
+                            .sort((a, b) => room.manager.usedCapacity(a) - room.manager.usedCapacity(b))
+                            .shift()
+
+                        // reassign harvester to help new room
+                        if (harvester) {
+                            harvester.drop(RESOURCE_ENERGY)
+                            harvester.memory.room = room.name
+                            harvester.tasks = [{
+                                action: 'harvest',
+                                id: room.manager.sources[0].id
+                            }]
+                            room.manager.creepsByRole.harvester.push(harvester)
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    public getAdjacentRooms(): string[] {
+        const match = this.room.name.match(/([WE])(\d+)([NS])(\d+)/)
+        if (!match) return []
+
+        const [, ew, x, ns, y] = match
+        const xNum = parseInt(x, 10)
+        const yNum = parseInt(y, 10)
+
+        const adjacentRooms: string[] = []
+
+        const directions = [
+            { dx: -1, dy: 0 }, // West
+            { dx: 1, dy: 0 },  // East
+            { dx: 0, dy: -1 }, // South
+            { dx: 0, dy: 1 },  // North
+        ]
+
+        for (const { dx, dy } of directions) {
+            const newX = xNum + dx
+            const newY = yNum + dy
+            const newRoom = `${ew}${newX}${ns}${newY}`
+            adjacentRooms.push(newRoom)
+        }
+
+        return adjacentRooms
+    }
+
+    public getUnseenAdjacentRooms(): string[] {
+        return this.getAdjacentRooms().filter(room => !Game.rooms[room])
+    }
+
+    public getUnseenRoomsIfStale(): string[] {
+        return this.getAdjacentRooms().filter(room => {
+            // Check if the room is not visible
+            if (!Game.rooms[room]) return true
+
+            // If visible, check the memory for last visit time
+            const lastVisited = Game.rooms[room].memory.lastSeen || 0
+            const threatLevel = Game.rooms[room].memory.threatLevel || 0
+
+            return (Game.time - lastVisited) >= (threatLevel > 1 ? 300 : 150)
+        })
+    }
+
+    public getThreatLevel(): number {
+        const hostiles = this.room.find(FIND_HOSTILE_CREEPS)
+        const hostileStructures = this.room.find(FIND_HOSTILE_STRUCTURES, {
+            filter: (s) => s.structureType === STRUCTURE_TOWER
+        })
+
+        if (this.controller?.owner && !this.controller.my) {
+            return 4 // Enemy-controlled room
+        }
+
+        if (hostileStructures.length > 0) {
+            return 3 // Enemy towers detected
+        }
+
+        if (hostiles.length > 0) {
+            const hasAttackParts = hostiles.some(c => c.getActiveBodyparts(ATTACK) > 0 || c.getActiveBodyparts(RANGED_ATTACK) > 0)
+            const hasHealParts = hostiles.some(c => c.getActiveBodyparts(HEAL) > 0)
+
+            if (hasAttackParts || hasHealParts) {
+                return 2 // Armed hostile creeps detected
+            }
+
+            return 1 // Unarmed hostile creeps detected
+        }
+
+        return 0 // No threats detected
+    }
+
+    public usedCapacity(target: TargetTypes | undefined) {
         if (!target) return 0
+
+        if (target instanceof Creep && target.store[RESOURCE_ENERGY] === null) {
+            return 0
+        }
 
         this.transfers[target.id] ??= 0
 
+        if (target instanceof Resource) {
+            return target.amount + this.transfers[target.id]
+        }
+
         if ('store' in target) {
-            return (target.store.getUsedCapacity(RESOURCE_ENERGY) ?? target.store.getUsedCapacity()) + this.transfers[target.id]
+            return (target.store.getUsedCapacity(RESOURCE_ENERGY) ?? target.store.getUsedCapacity() ?? 0) + this.transfers[target.id]
         }
 
         if ('energy' in target) {
             return Math.min(target.energyCapacity, target.energy + this.transfers[target.id])
         }
 
-        if ('amount' in target) {
-            return Math.min(0, target.amount + this.transfers[target.id])
-        }
-
         return 0
     }
 
-    private freeCapacity(target: TargetTypes | undefined) {
+    public freeCapacity(target: TargetTypes | undefined) {
         if (!target) return 0
+
+        if (target instanceof Creep && target.store[RESOURCE_ENERGY] === null) {
+            return 0
+        }
 
         this.transfers[target.id] ??= 0
 
@@ -333,14 +502,18 @@ class RoomHivemind {
         }
 
         if ('amount' in target) {
-            return Math.max(0, target.amount - this.transfers[target.id])
+            return 0
         }
 
         return 0
     }
 
-    private getCapacity(target: TargetTypes | undefined): number {
+    public getCapacity(target: TargetTypes | undefined): number {
         if (!target) return 0
+
+        if (target instanceof Creep && target.store[RESOURCE_ENERGY] === null) {
+            return 0
+        }
 
         if ('store' in target) {
             return target.store.getCapacity(RESOURCE_ENERGY) ?? target.store.getCapacity() ?? 0
@@ -357,1694 +530,174 @@ class RoomHivemind {
         return 0
     }
 
-    workPower(creep: Creep): number {
-        const workParts = creep.body.filter(b => b.type === WORK).length
-        if (!workParts) return 0
+    private buildCreepBody(
+        energyAvailable: number,
+        partsRatio: { [key in BodyPartConstant]?: number },
+        workRatePerPart: number = 2,
+        maxWorkRate?: number // Optional cap on WORK parts (max energy/tick)
+    ): BodyPartConstant[] {
+        const body: BodyPartConstant[] = []
 
-        const buildEnergyPerTick = workParts * BUILD_POWER
-        const upgradeEnergyPerTick = workParts * UPGRADE_CONTROLLER_POWER
+        energyAvailable = Math.min(this.energyCapacityAvailable, energyAvailable)
 
-        if (creep.role === 'harvester') return buildEnergyPerTick
-        if (creep.role === 'upgrader') return upgradeEnergyPerTick
-        if (creep.role === 'builder') return buildEnergyPerTick
+        let remainingEnergy = energyAvailable
 
-        return 0
-    }
+        // Convert ratio object into an array and filter valid parts
+        const validParts = Object.entries(partsRatio) as [BodyPartConstant, number][]
+        if (validParts.length === 0) return []
 
-    private manageDefenders() {
-        if (!this.enemies.length) return
+        // Normalize the ratios so the smallest value is 1
+        const minRatio = Math.min(...validParts.map(([, ratio]) => ratio))
+        const scaledRatios = validParts.map(([part, ratio]) => [part, ratio / minRatio] as [BodyPartConstant, number])
 
-        const allMyDefenders = Object.values(Game.creeps)
-            .filter(c => c.role === 'defender' && !c.room.memory.enemies.length && (c.room.name !== this.room.name || c.room.name !== this.room.name))
+        // Calculate the cost of one full ratio set
+        const unitCost = scaledRatios.reduce((sum, [part, ratio]) => sum + BODYPART_COST[part] * ratio, 0)
 
-        allMyDefenders.forEach(defender => {
-            defender.tasks = []
-            defender.addTask({
-                action: 'move',
-                pos: {
-                    x: 25,
-                    y: 25,
-                    roomName: this.room.name,
-                    range: 48
+        // Determine how many full sets fit within available energy
+        let maxFullSets = Math.floor(energyAvailable / unitCost)
+        remainingEnergy -= maxFullSets * unitCost
+
+        // Track WORK parts to respect `maxWorkRate`
+        let totalWorkParts = 0
+        const canAddWork = () => maxWorkRate === undefined || (totalWorkParts + 1) * workRatePerPart <= maxWorkRate
+
+        // Add full sets while respecting max work rate
+        for (let i = 0; i < maxFullSets; i++) {
+            scaledRatios.forEach(([part, ratio]) => {
+                const partCount = Math.floor(ratio) // Ensure an integer amount
+                for (let j = 0; j < partCount; j++) {
+                    if (part === WORK && !canAddWork()) continue // Respect maxWorkRate
+                    body.push(part)
+                    if (part === WORK) totalWorkParts++
                 }
-            } as TaskPosition)
-        })
-    }
-
-
-
-
-
-
-
-    private debugName = 'Mdd1'
-    findBestTask(creep: Creep): { task: 'harvest' | 'build' | 'upgrade' | 'withdraw' | 'transfer' | 'attack', target: TargetTypes, score: number }[] {
-        const maxPossibleDistance = 50
-        const isHarvester = creep.role === 'harvester'
-        const isBuilder = creep.role === 'builder'
-        const isUpgrader = creep.role === 'upgrader'
-        const isMule = creep.role === 'mule'
-        const isDefender = creep.role === 'defender'
-
-        // Task options
-        const constructionSites = this.constructionSites
-        const controller = this.controller as StructureController
-        const roomEnergyFull = this.energyAvailable >= this.energyCapacityAvailable
-
-        // Predict movement efficiency
-        const moveParts = creep.body.filter(b => b.type === MOVE).length
-        const nonMoveParts = creep.body.length - moveParts
-        const effectiveMove = (moveParts * 2) - nonMoveParts
-        const isSlowMover = effectiveMove < 1
-
-        // Check role limits
-        const buildersAssigned = this.creepsByTask.build
-        const upgradersAssigned = this.creepsByTask.upgrade
-        const harvestersAssigned = this.creepsByTask.harvest
-        const buildersLimitReached = buildersAssigned.length >= this.config.maxBuilders
-        const upgradersLimitReached = upgradersAssigned.length >= this.config.maxUpgraders
-        const harvestersLimitReached = harvestersAssigned.length >= this.sourceWalkablePositionsTotal
-
-        // Dynamic Energy Calculation (Using WORK Parts)
-        const workParts = creep.body.filter(b => b.type === WORK).length
-        const buildEnergyPerTick = workParts * BUILD_POWER
-        const upgradeEnergyPerTick = workParts * UPGRADE_CONTROLLER_POWER
-
-        // **Ensure at least multiple cycles of actions before assigning work**
-        const freeCapacity = this.freeCapacity(creep)
-        const usedCapacity = this.usedCapacity(creep)
-        const roomEnergyLow = this.roomEnergyPercentage < 0.25 // room energy below 25% capacity
-        const cyclesRequired = roomEnergyLow ? 3 : 7
-        const hasEnoughForBuild = usedCapacity > Math.min(50, buildEnergyPerTick * cyclesRequired)
-        const hasEnoughForUpgrade = usedCapacity > Math.min(50, upgradeEnergyPerTick * cyclesRequired)
-
-
-
-        this.log('manageCreeps', `  -#ffb300[**findBestTask:**] ${creep.name} isHarvester: ${isHarvester ? 'yes' : 'no'} isBuilder: ${isBuilder ? 'yes' : 'no'} isUpgrader: ${isUpgrader ? 'yes' : 'no'} isMule: ${isMule ? 'yes' : 'no'}`)
-        if (creep.name === this.debugName) console.log(creep.name, 'usedCapacity:', usedCapacity, 'freeCapacity:', freeCapacity, 'buildEnergyPerTick:', buildEnergyPerTick, 'upgradeEnergyPerTick:', upgradeEnergyPerTick, 'hasEnoughForBuild:', hasEnoughForBuild, 'hasEnoughForUpgrade:', hasEnoughForUpgrade)
-
-        // Determine valid targets based on task type
-        let validTargets: TargetTypes[] = []
-
-        if (isHarvester) {
-            validTargets = []
-
-            if (freeCapacity > 0) validTargets.push(...this.sourcesActive)
-            if (usedCapacity > 0) validTargets.push(...this.refillables)
-
-            if (hasEnoughForBuild) validTargets.push(...constructionSites)
-            if (hasEnoughForUpgrade) validTargets.push(controller)
-        }
-        if (isBuilder) {
-            validTargets = constructionSites.length > 0 ? constructionSites : this.sourcesActive
-            validTargets.push(controller)
-        }
-        if (isUpgrader) {
-            validTargets = hasEnoughForUpgrade && controller ? [controller] : this.sourcesActive
-        }
-        if (isMule) {
-            validTargets = [
-                ...this.refillables,
-                ...this.creeps
-                    .filter(c => c.id !== creep.id
-                        && this.freeCapacity(c) >= this.workPower(c) * (c.pos.getRangeToCached(creep.pos) + 2)
-                        && this.usedCapacity(c) <= 100
-                        && (c.hasTaskByAction('build') || c.hasTaskByAction('upgrade'))
-                        && c.pos.getRangeToCached(creep.pos) < 11
-                    )]
-        }
-
-        if (freeCapacity > 0 || isMule) {
-            validTargets.push(...this.containers)
-        }
-
-        if (isDefender) {
-            validTargets = this.enemies
-        }
-
-        this.log('manageCreeps', `    - valid targets:`, validTargets.length)
-
-        // remove duplicates
-        validTargets = validTargets.filter((target, index, self) =>
-            index === self.findIndex((t) => t.id === target.id)
-        )
-
-        // Scoring system for valid targets
-        const scores = validTargets.map(target => {
-            const distance = creep.pos.getRangeToCached(target.pos)
-            const distanceFactor = (isSlowMover ? 0.5 : 1) - (distance / maxPossibleDistance) * 2
-            let priorityFactor = 0
-            let task: 'harvest' | 'build' | 'upgrade' | 'withdraw' | 'transfer' | 'attack' = 'harvest'
-
-            // Calculate assigned creeps based on determined task type
-            const getAssignedCreeps = (taskType: typeof task) =>
-                this.creepsByTask[taskType].filter(c =>
-                    c.id !== creep.id
-                    && c.hasTask(taskType, target.id)
-                    && c.pos.getRangeToCached(target.pos) < creep.pos.getRangeToCached(target.pos)
-                )
-
-            // console.log(creep.name, target, 'assignedCreeps:', assignedCreeps.length, assignedCreeps.map(c => c.name))
-
-            // sources
-            if (target instanceof Source) {
-                task = 'harvest'
-                priorityFactor = harvestersLimitReached ? -10 : 1.5
-
-                const powerFactor = (target.energy / target.energyCapacity) * 0.05            // power factor
-                const walkablePositionsFactor = (target.walkablePositions - getAssignedCreeps(task).length) * 0.25   // walkable positions factor
-                const ticksToRegenerationFactor = target.ticksToRegeneration > 0 ? (target.ticksToRegeneration / 100) * -0.25 : 0                 // ticks to regeneration factor
-
-                priorityFactor += powerFactor
-                priorityFactor += walkablePositionsFactor
-                priorityFactor += ticksToRegenerationFactor
-
-                if (isHarvester) priorityFactor += 1
-                if (isSlowMover) priorityFactor += 1
-
-                const ticksToRegeneration = target.ticksToRegeneration
-                if (target.energy < 100) {           // Adjust the threshold as needed
-                    priorityFactor -= 2                     // Deprioritize nearly exhausted sources
-                }
-
-                if (getAssignedCreeps(task).length >= target.walkablePositions) {
-                    priorityFactor = -100
-                }
-            }
-
-            // construction sites
-            else if (target instanceof ConstructionSite) {
-                task = 'build'
-                priorityFactor = buildersLimitReached ? -10 : 1.0
-
-                if (isBuilder) priorityFactor += 1
-                if (isSlowMover) priorityFactor -= 1
-
-                // Assign structure priority
-                if (target.structureType === STRUCTURE_SPAWN) priorityFactor += 200
-                else if (target.structureType === STRUCTURE_EXTENSION) priorityFactor += 1.5
-                else if (target.structureType === STRUCTURE_TOWER) priorityFactor += 1
-                else if (target.structureType === STRUCTURE_WALL) priorityFactor -= 0.5 // Walls last
-                else if (target.structureType === STRUCTURE_CONTAINER) priorityFactor += 4
-
-                priorityFactor += (target.progress / target.progressTotal) * 2
-
-                // factor for progress
-                if (target.progress === 0) priorityFactor -= 1
-
-                if (this.creepsByTask.upgrade.length > 0) { // only if upgraders are assigned
-                    priorityFactor += getAssignedCreeps(task).length * 0.2 // increase to speed it up
-                }
-
-                if (freeCapacity > 0) {
-                    priorityFactor -= 1
-                }
-            }
-
-            // controller
-            else if (target instanceof StructureController) {
-                task = 'upgrade'
-                priorityFactor = upgradersLimitReached ? -5 : 0.6
-
-                if (isUpgrader) priorityFactor += 1
-                if (isSlowMover) priorityFactor += 1
-                if (roomEnergyFull) priorityFactor += 1.5
-
-                priorityFactor -= upgradersAssigned.length * 0.2 // Reduce if too many upgraders
-            }
-
-            // spawns
-            else if (target instanceof StructureSpawn || target instanceof StructureExtension || target instanceof StructureTower) {
-                task = 'transfer'
-                priorityFactor = 10
-
-                if (isMule) priorityFactor += 1
-                if (roomEnergyFull) priorityFactor -= 1.5
-            }
-
-            // containers
-            else if (target instanceof StructureContainer) {
-                task = freeCapacity > 0 ? 'withdraw' : 'transfer'
-                priorityFactor = this.freeCapacity(target) > 0 ? 1.0 : -10
-
-                if (!roomEnergyFull && freeCapacity > 0 && task === 'withdraw' && (!this.creepsByRole.mule.length || isMule)) priorityFactor += 10
-
-                if (isMule) priorityFactor += 1
-                if (roomEnergyFull) priorityFactor -= 1.5
-
-                if (isMule) {
-                    const isNearSpawn = this.containersNearSpawns.some(c => c.id === target.id)
-                    const isNearSource = this.containersNearSources.some(c => c.id === target.id)
-                    const isNearController = this.containersNearController.some(c => c.id === target.id)
-                    if (task === 'transfer') {
-                        if (isNearSpawn) priorityFactor += 3
-                        if (isNearSource) priorityFactor = -100 // avoid sources
-                        if (isNearController) priorityFactor += 1
-                    } else if (task === 'withdraw') {
-                        if (isNearSpawn) priorityFactor += (roomEnergyFull ? -100 : 0)
-                        if (isNearController) priorityFactor -= -10
-                    }
-                }
-            }
-            else if (target instanceof Creep && !target.my) {
-                task = 'attack'
-                priorityFactor = 100
-            }
-            // creep to transfer energy
-            else if (target instanceof Creep) {
-                task = 'transfer'
-                priorityFactor = 0
-
-                if (!roomEnergyFull) priorityFactor -= 100
-            }
-
-
-            // check withdraw
-            if (task === 'withdraw' && (!freeCapacity || !this.usedCapacity(target))) {
-                priorityFactor = -100
-
-            } else if (task === 'withdraw' || task === 'harvest') {
-                const assignedWithdrawersFreeCapacity = getAssignedCreeps(task)
-                    .reduce((acc, c) => acc + this.freeCapacity(c), 0)
-                const targetUsedCapacity = this.usedCapacity(target)
-
-                if (targetUsedCapacity > 0 && assignedWithdrawersFreeCapacity > targetUsedCapacity) {
-                    priorityFactor -= (targetUsedCapacity / assignedWithdrawersFreeCapacity) * 0.45
-                }
-            }
-            // check transfer
-            else if (task === 'transfer' && (!usedCapacity || !this.freeCapacity(target))) {
-                priorityFactor = -100
-
-            } else if (task === 'transfer') {
-                const assignedTransferCarryTotal = getAssignedCreeps(task)
-                    .reduce((acc, c) => acc + this.usedCapacity(c), 0)
-                const targetFreeCapacity = this.freeCapacity(target)
-
-                if (targetFreeCapacity > 0 && assignedTransferCarryTotal > targetFreeCapacity) {
-                    priorityFactor -= (assignedTransferCarryTotal / targetFreeCapacity) * 0.45
-                }
-            }
-
-            // check if the target can fulfill the withdraw task
-            if (task === 'withdraw' && this.usedCapacity(target) < freeCapacity) {
-                priorityFactor -= 10
-            }
-
-
-            const assignmentFactor = 1 / (1 + getAssignedCreeps(task).length) // assignment factor
-
-            if (creep.name === this.debugName) console.log(creep.name, target, 'priorityFactor:', priorityFactor, 'distanceFactor:', distanceFactor, 'assignmentFactor:', assignmentFactor)
-
-            const score =
-                (priorityFactor * 0.35) +       // priority factor
-                (distanceFactor * 0.40) +       // distance factor
-                (assignmentFactor * -0.3) +     // assignment factor
-                (Math.random() * 0.05)          // random factor to break ties
-
-            return { task, target, score: parseFloat(score.toFixed(2)) }
-        })
-
-        const bestTasks = scores
-            .filter(t => t.score > -20)
-            .sort((a, b) => b.score - a.score)
-
-        this.log('manageCreeps', `  - #00fff4[**findBestTask:**] final scores for ${creep.name}`, bestTasks.map(t => ({ task: t.task, target: String(t.target), score: t.score })))
-        if (creep.name === this.debugName) console.log(creep.name, 'bestTask:', JSON.stringify(bestTasks.map(t => ({ task: t.task, target: String(t.target), score: t.score })), null, 2))
-
-        return bestTasks
-    }
-
-
-
-
-
-    private creepFindTasks(creep: Creep): void {
-        if (creep.hasTasks()) return
-
-        if (creep.role === 'scout') {
-            this.executeScout(creep, new RoomPosition(25, 25, creep.room.name))
-            return
-        }
-
-        if (creep.role === 'claimer') {
-            this.executeClaim(creep, new RoomPosition(25, 25, creep.room.name))
-            return
-        }
-
-        const bestTasks = this.findBestTask(creep)
-
-        if (bestTasks.length > 0) {
-            const bestTask = bestTasks.shift()
-
-            if (bestTask) {
-                creep.addTask({
-                    action: bestTask.task,
-                    id: bestTask.target.id,
-                })
-                this.creepsByTask[bestTask.task].push(creep)
-            }
-        }
-    }
-
-    private removeTaskByIndex(creep: Creep, index: number, findNew: boolean = true) {
-        const task = creep.tasks[index]
-        task.deleted = true
-        this.log('manageCreeps', `#00ffcd[**task completed:**] action: ${task.action}`)
-
-        creep.tasks.splice(index, 1)
-
-        creep.tasks.forEach(task => {
-            this.creepsByTask[task.action] = this.creepsByTask[task.action].filter(c => c.id !== creep.id && c.hasTaskByAction(task.action))
-        })
-
-        if (findNew) {
-            this.creepFindTasks(creep)
-        }
-    }
-
-    private executeTask(creep: Creep, task: TaskObject | TaskPosition, target: TargetTypes | RoomPosition): ScreepsReturnCode {
-        this.log('manageCreeps', `\n**Execute Task:** ${task.action}\n  - **target:** ${target}`)
-
-        const workPower = creep.body.filter(b => b.type === WORK).length
-        switch (task.action) {
-            case 'harvest': return this.executeHarvest(creep, target as Source, workPower)
-            case 'build': return this.executeBuild(creep, target as ConstructionSite, workPower)
-            case 'repair': return this.executeRepair(creep, target as Structure, workPower)
-            case 'transfer': return this.executeTransfer(creep, target as Structure<StructureConstant>, 'amount' in task ? task.amount : undefined)
-            case 'withdraw': return this.executeWithdraw(creep, target as StructureContainer)
-            case 'pickup': return this.executePickup(creep, target as Resource)
-            case 'upgrade': return this.executeUpgrade(creep, target as StructureController, workPower)
-            case 'renew': return this.executeRenew(creep, target as StructureSpawn)
-            case 'recycle': return (target as StructureSpawn).recycleCreep(creep)
-            case 'attack': return this.executeAttack(creep, target as Creep)
-            case 'move': return this.executeMove(creep, target as RoomPosition, task as TaskPosition)
-            case 'scout': return this.executeScout(creep, target as RoomPosition)
-            case 'claim': return this.executeClaim(creep, target as RoomPosition, task as TaskPosition)
-            default: this.log('manageCreeps', '**executeTask:** action not found', task.action, 'target:', target); return ERR_NOT_FOUND
-        }
-    }
-
-    private handleTaskResult(creep: Creep, task: TaskObject | TaskPosition, target: TargetTypes | RoomPosition, result: ScreepsReturnCode, taskId: number): void {
-        const resultToText = (result: ScreepsReturnCode): string => {
-            switch (result) {
-                case OK: return 'OK'
-                case ERR_NOT_IN_RANGE: return 'ERR_NOT_IN_RANGE'
-                case ERR_BUSY: return 'ERR_BUSY'
-                case ERR_FULL: return 'ERR_FULL'
-                case ERR_INVALID_TARGET: return 'ERR_INVALID_TARGET'
-                case ERR_NOT_ENOUGH_RESOURCES: return 'ERR_NOT_ENOUGH_RESOURCES'
-                case ERR_NOT_FOUND: return 'ERR_NOT_FOUND'
-                case ERR_NOT_OWNER: return 'ERR_NOT_OWNER'
-                case ERR_NOT_IN_RANGE: return 'ERR_NOT_IN_RANGE'
-                case ERR_NO_BODYPART: return 'ERR_NO_BODYPART'
-                case ERR_NO_PATH: return 'ERR_NO_PATH'
-                case ERR_NO_BODYPART: return 'ERR_NO_BODYPART'
-                default: return result.toString()
-            }
-        }
-        this.log('manageCreeps', `  - **task result:** ${resultToText(result)}`)
-
-        if (result === ERR_NOT_IN_RANGE) {
-            if (task.blocking === true) {
-                this.log('manageCreeps', `  - **not in range** task will be removed from list as its blocking`)
-                this.removeTaskByIndex(creep, taskId)
-                return
-            }
-
-            if (this.creepCompletedActions[creep.id].has('move')) return
-
-            if ((target instanceof RoomPosition && target.roomName !== creep.room.name) || ('roomName' in target && target.roomName !== creep.room.name)) {
-                // Move towards target room
-                const exitDir = creep.room.findExitTo(target.roomName)
-
-                if (exitDir !== ERR_NO_PATH && exitDir !== ERR_INVALID_ARGS) {
-                    const exitPos = creep.pos.findClosestByPath(exitDir)
-
-                    if (exitPos) {
-                        const result = creep.moveTo(exitPos)
-                        if (result === OK) {
-                            this.creepCompletedActions[creep.id].add('move')
-                        }
-                    }
-                }
-            } else if (OK === creep.moveTo(target)) {
-                this.creepCompletedActions[creep.id].add('move')
-            }
-        }
-        else if (result === OK || result === ERR_NOT_ENOUGH_RESOURCES || result === ERR_FULL || result === ERR_INVALID_TARGET) { // easy way to complete task
-            this.removeTaskByIndex(creep, taskId)
-        }
-        else if (result === ERR_BUSY) { // wait until next tick
-            task.waiting = true
-        }
-        else {
-            this.log('manageCreeps', `#ff6969[**untracked task result:**] ${result}`, `**target:** ${target}`, '**task:**', { ...task })
-        }
-    }
-
-    private manageCreepTasks(creep: Creep) {
-        this.creepCompletedActions[creep.id] = new Set<ActionTypes>()
-
-        this.log('manageCreeps', `\n#5aff6f[##${creep.name} processing tasks:##] `, creep.tasks.map(t => t.action).join(', '))
-
-        const myFlag = this.flags.find(f => f.name === creep.name)
-        if (myFlag) {
-            if (creep.pos.isEqualTo(myFlag.pos)) {
-                this.log('manageCreeps', `  - **flag found:** ${myFlag.name}`)
-                myFlag.remove()
-            } else {
-                this.log('manageCreeps', `  - **flag found:** moving to position ${myFlag.pos}`)
-                creep.tasks = []
-                creep.moveTo(myFlag.pos)
-            }
-            return
-        }
-
-        this.creepFindTasks(creep)
-
-        const getTarget = (task: TaskObject): TargetTypes | RoomPosition | undefined => {
-            // this.log('manageCreeps', `  - **getTarget:** ${task.action}`, { ...task })
-
-            if (task.action === 'attack') {
-                this.log('manageCreeps', `  - **getTarget:** attack`, { ...task }, this.enemies)
-            }
-
-            switch (task.action) {
-                case 'harvest': return this.sources.find(source => source.id === task.id)
-                case 'build': return this.constructionSites.find(site => site.id === task.id)
-                case 'repair': return this.needsRepair.find(structure => structure.id === task.id)
-                case 'transfer':
-                case 'withdraw': return Game.getObjectById<TargetTypes>(task.id) as TargetTypes
-                case 'upgrade': return this.controller
-                case 'renew':
-                case 'recycle': task.persistent = true; return this.spawns.find(spawn => spawn.id === task.id)
-                case 'pickup': return this.droppedResources.find(resource => resource.id === task.id)
-                case 'attack': return this.enemies.find(enemy => enemy.id === task.id) as Creep
-                case 'claim':
-                case 'scout':
-                case 'move': return 'pos' in task && typeof task.pos === 'object' && task.pos !== null && 'x' in task.pos && 'y' in task.pos && 'roomName' in task.pos ? new RoomPosition(task.pos.x as number, task.pos.y as number, task.pos.roomName as string) : undefined
-
-                default: this.log('manageCreeps', '#ff6969[**untracked task action:**]', task.action); return undefined
-            }
-        }
-
-        let i = 0
-        while (creep.tasks.length > 0) {
-            i++
-            if (i > 4) {
-                this.log('manageCreeps', `<h1>**manageCreep:**</h1> infinite loop`)
-                this.log('manageCreeps', '**local.usedCapacity:**', this.usedCapacity(creep))
-                this.log('manageCreeps', '**local.freeCapacity:**', this.freeCapacity(creep))
-                this.log('manageCreeps', '**store.usedCapacity:**', creep.store.getUsedCapacity(RESOURCE_ENERGY))
-                this.log('manageCreeps', '**store.freeCapacity:**', creep.store.getFreeCapacity(RESOURCE_ENERGY))
-                break
-            }
-
-            const taskId = creep.tasks.findIndex(t => !t.completed && !t.waiting && ('id' in t || 'pos' in t))
-            if (taskId === -1) break
-
-            const task = creep.tasks[taskId] as TaskObject
-
-            task.completed = true
-
-            const target = getTarget(task)
-            if (!target) {
-                this.log('manageCreeps', `**target not found:** clearing action: ${task.action}`)
-                this.removeTaskByIndex(creep, taskId)
-                continue
-            }
-
-            const result = this.executeTask(creep, task, target)
-            this.handleTaskResult(creep, task, target, result, taskId)
-
-            if (task.persistent && !task.deleted) {
-                this.log('manageCreeps', `  - **persistent task:** ${task.action}`)
-                break
-            }
-        }
-
-        creep.tasks.forEach(t => {
-            t.completed = undefined
-            t.waiting = undefined
-        })
-
-        if (!creep.tasks.length) {
-            this.log('manageCreeps', `  - **no tasks left:** ${creep.name}`)
-
-            const nearestFlag = this.flags
-                .sort((a, b) => creep.pos.getRangeToCached(a.pos) - creep.pos.getRangeToCached(b.pos))
-                .shift()
-
-            if (nearestFlag && creep.pos.getRangeToCached(nearestFlag.pos) > 2) {
-                const result = creep.moveTo(nearestFlag.pos)
-                if (result === OK) {
-                    this.creepCompletedActions[creep.id].add('move')
-                }
-            }
-        }
-
-        this.log('manageCreeps',
-            '\n#2badff[**tasks summary:**]',
-            '\n  - **tasks left:** ', creep.tasks
-                .map(t => {
-                    if (t.action === 'harvest') {
-                        const workPower = creep.body.filter(b => b.type === WORK).length
-                        const ticksLeft = this.freeCapacity(creep) / (workPower * HARVEST_POWER)
-                        return `${t.action} (ticks left: ${ticksLeft})`
-                    } else if (t.action === 'build') {
-                        const workPower = creep.body.filter(b => b.type === WORK).length
-                        const ticksLeft = this.usedCapacity(creep) / (workPower * BUILD_POWER)
-                        return `${t.action} (ticks left: ${ticksLeft})`
-                    } else if (t.action === 'repair') {
-                        const workPower = creep.body.filter(b => b.type === WORK).length
-                        const ticksLeft = this.usedCapacity(creep) / (workPower * REPAIR_POWER)
-                        return `${t.action} (ticks left: ${ticksLeft})`
-                    } else if (t.action === 'upgrade') {
-                        const workPower = creep.body.filter(b => b.type === WORK).length
-                        const ticksLeft = this.usedCapacity(creep) / (workPower * UPGRADE_CONTROLLER_POWER)
-                        return `${t.action} (ticks left: ${ticksLeft})`
-                    }
-                    return t.action
-                })
-                .join(', '),
-            '\n  - **actions completed:** ', Array.from(this.creepCompletedActions[creep.id]).join(', '),
-            `\n  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`,
-            `\n  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`
-        )
-    }
-
-    private executeClaim(creep: Creep, target: RoomPosition, task?: TaskPosition): ScreepsReturnCode {
-        const findNewClaim = (): boolean => {
-            const wantedRoom = Object.entries(CONFIG.rooms).filter(([roomName, room]) => {
-                if (roomName === 'default') return false
-
-                if (Game.rooms[roomName]?.controller?.my || Memory.rooms[roomName]?.owner) {
-                    return false
-                }
-
-                return true
             })
-                .map(([roomName]) => roomName)
-                .shift()
-
-            if (wantedRoom) {
-                this.log('manageCreeps', `  - **new claim:** ${wantedRoom}`)
-
-                creep.addTask({
-                    action: 'claim',
-                    pos: {
-                        x: 25,
-                        y: 25,
-                        roomName: wantedRoom
-                    }
-                } as TaskPosition)
-
-                return true
-            }
-
-            return false
         }
 
-        if (creep.room.name === target.roomName) {
-            const controller = creep.room.controller
-
-            if (controller) {
-                if (controller.my) {
-                    if (findNewClaim()) return ERR_BUSY
-
-                    this.log('manageCreeps', `  - **claim controller:** ${controller.id} (already claimed by ${controller.owner!.username})`)
-                    return OK
+        // Add extra parts dynamically to fill up remaining energy
+        while (true) {
+            let addedPart = false
+            for (const [part, ratio] of scaledRatios) {
+                if (remainingEnergy >= BODYPART_COST[part] && (part !== WORK || canAddWork())) {
+                    body.push(part)
+                    remainingEnergy -= BODYPART_COST[part]
+                    if (part === WORK) totalWorkParts++
+                    addedPart = true
                 }
-
-                if (task) {
-                    task.pos.x = controller.pos.x
-                    task.pos.y = controller.pos.y
-                }
-
-                const result = creep.claimController(controller)
-                this.log('manageCreeps', `  - **claim result:** ${result}`)
-
-                return result
             }
-
-            this.log('manageCreeps', `  - **claim controller:** ${target.roomName} (no controller found)`)
-            return OK
-        } else {
-            // Move towards target room
-            const exitDir = creep.room.findExitTo(target.roomName)
-
-            if (exitDir === ERR_NO_PATH || exitDir === ERR_INVALID_ARGS) {
-                this.log('manageCreeps', `  - **claim:** no exit found to target room: ${target.roomName}`)
-                return OK // clears the task, another random room will be selected
-            }
-
-            const exitPos = creep.pos.findClosestByPath(exitDir)
-
-            if (!exitPos) {
-                this.log('manageCreeps', `  - **claim:** no exit pos found to target room: ${target.roomName}`)
-                return OK // clears the task, another random room will be selected
-            }
-
-            const result = creep.moveTo(target)
-            if (result === OK) {
-                this.creepCompletedActions[creep.id].add('move')
-            }
-
-            return ERR_BUSY
+            if (!addedPart) break // Stop if no more parts can be added
         }
 
-        return ERR_BUSY
+        return body.sort()
     }
 
-    private executeScout(creep: Creep, target: RoomPosition): ScreepsReturnCode {
-        if (creep.room.name === target.roomName) {
-            this.log('manageCreeps', `  - **in target room:** ${target.roomName}`)
-
-            const expiredRooms = Object.entries(Memory.rooms).filter(([roomName, room]) => {
-                if (room.lastVisited && room.lastVisited > Game.time - 300) {
-                    return false // room was visited in the last 300 ticks
-                }
-
-                if (Game.rooms[roomName]) {
-                    return false // room exists
-                }
-
-                return true // room does not exist
-            })
-                .map(([roomName]) => roomName)
-            this.log('manageCreeps', `  - **expired rooms:**`, expiredRooms.join(', '))
-
-            let newRoomName = expiredRooms.shift()
-
-            if (!newRoomName) {
-                this.log('manageCreeps', `  - **no expired rooms, exploring unexplored rooms**`)
-
-                const exits = Game.map.describeExits(creep.room.name)
-                const unexplored = Object.values(exits)
-                    .sort(() => Math.random() - 0.5)
-                    .find(room => !(Memory.rooms?.[room]))
-
-                if (unexplored) {
-                    newRoomName = unexplored
-                    this.log('manageCreeps', `  - **random unexplored room found:** ${newRoomName}`)
-                }
-            }
-
-            if (newRoomName) {
-                this.log('manageCreeps', `  - **tasking to unexplored room:** ${newRoomName}`)
-                creep.addTask({
-                    action: 'scout',
-                    pos: {
-                        x: 25,
-                        y: 25,
-                        roomName: newRoomName
-                    }
-                } as TaskPosition)
-                this.creepsByTask.scout.push(creep)
-
-                target = new RoomPosition(25, 25, newRoomName)
-            }
-        }
-
-        if (creep.room.name !== target.roomName) {
-            // Move towards target room
-            const exitDir = creep.room.findExitTo(target.roomName)
-
-            if (exitDir === ERR_NO_PATH || exitDir === ERR_INVALID_ARGS) {
-                this.log('manageCreeps', `  - **no exit found to target room:** ${target.roomName}`)
-                return OK // clears the task, another random room will be selected
-            }
-
-            const exitPos = creep.pos.findClosestByPath(exitDir)
-
-            if (!exitPos) {
-                this.log('manageCreeps', `  - **no exit pos found to target room:** ${target.roomName}`)
-                return OK // clears the task, another random room will be selected
-            }
-
-            target = exitPos
-        }
-
-        const result = creep.moveTo(target)
-        if (result === OK) {
-            this.creepCompletedActions[creep.id].add('move')
-        }
-
-        return ERR_BUSY
+    assignedToHarvest(): Creep[] {
+        return this.creeps.filter(c => c.hasTaskByAction('harvest'))
     }
 
-    private executeMove(creep: Creep, target: RoomPosition, task?: TaskPosition): ScreepsReturnCode {
-
-        if (creep.room.name !== target.roomName) {
-            // Move towards target room
-            const exitDir = creep.room.findExitTo(target.roomName)
-
-            if (exitDir === ERR_NO_PATH || exitDir === ERR_INVALID_ARGS) {
-                this.log('manageCreeps', `  - **executeMove** no exit found to target room: ${target.roomName}`)
-                return OK // clears the task, another random room will be selected
-            }
-
-            const exitPos = creep.pos.findClosestByPath(exitDir)
-
-            if (!exitPos) {
-                this.log('manageCreeps', `  - **executeMove** no exit pos found to target room: ${target.roomName}`)
-                return OK
-            }
-
-            const result = creep.moveTo(exitPos)
-            if (result === OK) {
-                this.creepCompletedActions[creep.id].add('move')
-                return ERR_BUSY
-            }
-
-            return result
-        }
-
-        if (creep.pos.getRangeToCached(target) <= (task?.pos.range ?? 0)) {
-            this.log('manageCreeps', `  - **executeMove** creep is already at target: ${target.x}, ${target.y}, ${target.roomName}`)
-            return OK
-        }
-
-        return ERR_NOT_IN_RANGE
-    }
-
-    private executePickup(creep: Creep, target: Resource): ScreepsReturnCode {
-        this.log('manageCreeps', `**pickup target:** ${target.id}`)
-
-        if (this.usedCapacity(target) === 0) {
-            this.log('manageCreeps', `  - **target out of resources**`)
-            return ERR_INVALID_TARGET
-        }
-
-        if (creep.pos.getRangeToCached(target.pos) > 1) {
-            this.log('manageCreeps', `  - **not in range**`)
-            return ERR_NOT_IN_RANGE
-        }
-
-        if (this.creepCompletedActions[creep.id].has('transfer')) {
-            this.log('manageCreeps', `  - **transfer already completed. waiting until next tick**`)
-            return ERR_BUSY
-        }
-
-        const result = creep.pickup(target)
-        this.log('manageCreeps', `  - **result:** ${result}`)
-
-        if (result === OK) {
-            this.transfers[creep.id] ??= 0
-            this.transfers[creep.id] += target.amount
-
-            this.transfers[target.id] ??= 0
-            this.transfers[target.id] -= target.amount
-
-            this.creepCompletedActions[creep.id].add('transfer')
-        }
-
-        return result
-    }
-
-    private executeAttack(creep: Creep, target: Creep): ScreepsReturnCode {
-        this.log('manageCreeps', `**attack target:** ${target.id}`)
-
-        const hasRangedAttack = creep.body.some(part => part.type === RANGED_ATTACK)
-        const hasHeal = creep.body.some(part => part.type === HEAL)
-
-        if (hasHeal) {
-            const healResult = creep.heal(target)
-            this.log('manageCreeps', `  - **heal result:** ${healResult}`)
-        }
-
-        if (hasRangedAttack) {
-            // Check if the target is within ranged attack range
-            if (creep.pos.getRangeToCached(target.pos) > 4) {
-                this.log('manageCreeps', `  - **not in ranged attack range, moving closer**`)
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ff0000' } })
-                return ERR_BUSY
-            }
-        } else {
-            // Check if the target is within ranged attack range
-            if (!creep.pos.isNearToCached(target.pos)) {
-                this.log('manageCreeps', `  - **not in ranged attack range, moving closer**`)
-                creep.moveTo(target, { visualizePathStyle: { stroke: '#ff0000' } })
-                return ERR_BUSY
-            }
-        }
-
-        if (hasRangedAttack) {
-            // Execute the ranged attack
-            const rangedAttackResult = creep.rangedAttack(target)
-            this.log('manageCreeps', `  - **ranged attack result:** ${rangedAttackResult}`)
-
-            const retreatDirection = creep.pos.getDirectionTo(target.pos)
-            if (OK === creep.move(((retreatDirection + 4) % 8 + 1) as DirectionConstant)) { // Move in the opposite direction
-                this.creepCompletedActions[creep.id].add('move')
-            }
-
-            return ERR_BUSY
-        }
-
-        // Execute the melee attack
-        const attackResult = creep.attack(target)
-        this.log('manageCreeps', `  - **attack result:** ${attackResult}`)
-
-        return ERR_BUSY
-    }
-
-    private executeUpgrade(creep: Creep, target: StructureController, workPower: number): ScreepsReturnCode {
-        const power = workPower * UPGRADE_CONTROLLER_POWER
-        this.log('manageCreeps', `  - **power:** ${power}`)
-        this.log('manageCreeps', `  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`, `\n  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`)
-
-        // if a harvester, and more than 4 creeps are upgrading, and there are positions at a source, abort
-        // we get in this situation when we have extra harvesters and a source was exhausted during assignment
-        // if (creep.role === 'harvester' && this.creepsByTask.upgrade.length >= 4 && this.sourceWalkablePositionsTotal > this.creepsByTask.harvest.length) {
-        //     this.log('manageCreeps', `  - **aborting upgrade task**`)
-        //     return OK
-        // }
-
-        // if (creep.role === 'harvester' &&
-        //     this.creepsByRole.mule.length &&
-        //     this.creepsByRole.upgrader.length >= 2 &&
-        //     this.creepsByRole.harvester.length < this.sourceWalkablePositionsTotal &&
-        //     this.containers.length > 0 && this.containers.every(c => !this.freeCapacity(c))
-        // ) {
-        //     this.log('manageCreeps', `  - **aborting upgrade task** `)
-        //     return OK
-        // }
-
-        // if there is no energy, wait until next tick for resources to be available
-        if (creep.store.getUsedCapacity(RESOURCE_ENERGY) < power) {
-            if (this.usedCapacity(creep) >= power) {
-                this.log('manageCreeps', `  - **wait until next tick for resources to be available**`)
-                return ERR_BUSY
-            } else {
-                this.log('manageCreeps', `  - **not enough resources**`)
-                return ERR_NOT_ENOUGH_RESOURCES
-            }
-        }
-
-        if (creep.pos.getRangeToCached(target.pos) > 4) {
-            this.log('manageCreeps', `  - **not in range**`)
-            return ERR_NOT_IN_RANGE
-        }
-
-        if (this.creepCompletedActions[creep.id].has('work')) {
-            this.log('manageCreeps', `  - **work already completed. waiting until next tick**`)
-            return ERR_BUSY
-        }
-
-        const result = creep.upgradeController(target)
-        this.log('manageCreeps', `  - **result:** ${result}`)
-
-        if (result === OK) {
-            this.transfers[creep.id] ??= 0
-            this.transfers[creep.id] -= power
-            this.transfers[target.id] ??= 0
-            this.transfers[target.id] += power
-
-            this.creepCompletedActions[creep.id].add('work')
-
-            if (this.usedCapacity(creep) >= power) {
-                this.log('manageCreeps', `  - **enough energy to continue upgrading**`)
-                return ERR_BUSY
-            }
-        }
-
-        return result
-    }
-
-    private executeHarvest(creep: Creep, target: Source, workPower: number): ScreepsReturnCode {
-        const power = workPower * HARVEST_POWER
-        this.log('manageCreeps', `  - **power:** ${power}`)
-        this.log('manageCreeps', `  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`, `\n  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`)
-        this.log('manageCreeps', `  - **sourceWalkablePositions:** ${target.walkablePositions}`)
-
-        // how many harvesters are at this source?
-        const harvestersAtSource = this.creepsByTask.harvest.filter(c => c.id !== creep.id && c.pos.isNearToCached(target.pos)).length
-        this.log('manageCreeps', `  - **harvesters at source:** ${harvestersAtSource}`)
-
-        // is this sort over assigned?
-        if (harvestersAtSource >= target.walkablePositions) {
-            this.creepsByTask.harvest = this.creepsByTask.harvest.filter(c => c.id !== creep.id)
-            this.log('manageCreeps', `  - **harvest over assigned**`)
-            return ERR_INVALID_TARGET
-        }
-
-        if (this.usedCapacity(target) === 0) {
-            this.log('manageCreeps', `  - **target out of resources**`)
-            return ERR_INVALID_TARGET
-        }
-
-        if (!creep.pos.isNearToCached(target.pos)) {
-            this.log('manageCreeps', `  - **not in range**`)
-            return ERR_NOT_IN_RANGE
-        }
-
-        if (creep.store.getFreeCapacity(RESOURCE_ENERGY) < power) { // not enough resources
-            if (!this.freeCapacity(creep)) { // wait until next tick for resources to be available
-                this.log('manageCreeps', `  - **full**`)
-                return ERR_FULL
-            }
-        }
-
-        if (this.creepCompletedActions[creep.id].has('work')) {
-            this.log('manageCreeps', `  - **work already completed. waiting until next tick**`)
-            return ERR_BUSY
-        }
-
-        const result = creep.harvest(target)
-        this.log('manageCreeps', `  - **result:** ${result}`)
-
-        if (result === OK) {
-            this.transfers[creep.id] ??= 0
-            this.transfers[creep.id] += workPower * HARVEST_POWER
-            this.transfers[target.id] ??= 0
-            this.transfers[target.id] -= workPower * HARVEST_POWER
-
-            this.creepCompletedActions[creep.id].add('work')
-
-            if (this.freeCapacity(creep) > 0) {
-                return ERR_BUSY
-            }
-        }
-
-        return result
-    }
-
-    private executeBuild(creep: Creep, target: ConstructionSite, workPower: number): ScreepsReturnCode {
-        const power = workPower * BUILD_POWER
-        this.log('manageCreeps', `  - **power:** ${power}`)
-        this.log('manageCreeps', `  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`, `\n  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`)
-
-        if (creep.store.getUsedCapacity(RESOURCE_ENERGY) < power) { // not enough resources
-            this.log('manageCreeps', `  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`)
-            this.log('manageCreeps', `  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`)
-
-            if (this.usedCapacity(creep) >= power) { // wait until next tick for resources to be available
-                this.log('manageCreeps', `  - **wait until next tick for resources to be available**`)
-                return ERR_BUSY
-            } else {
-                this.log('manageCreeps', `  - **not enough resources**`)
-                return ERR_NOT_ENOUGH_RESOURCES
-            }
-        }
-
-        const range = creep.pos.getRangeToCached(target.pos)
-        this.log('manageCreeps', `  - **range:** ${range}`)
-        if (range > 4) { // not in range
-            return ERR_NOT_IN_RANGE
-        }
-
-        if (this.creepCompletedActions[creep.id].has('work')) {
-            this.log('manageCreeps', `  - **work already completed** waiting until next tick`)
-            return ERR_BUSY
-        }
-
-        const result = creep.build(target)
-        this.log('manageCreeps', `  - **result:** ${result}`)
-
-        if (result === OK && !this.creepCompletedActions[creep.id].has('move')) {
-            const nearestFlag = this.flags.find(f => f.pos.getRangeToCached(target.pos) <= 4)
-            if (nearestFlag) {
-                const result = creep.moveTo(nearestFlag.pos)
-                if (result === OK) {
-                    this.creepCompletedActions[creep.id].add('move')
-                }
-            }
-        }
-
-        if (result === OK) {
-            this.transfers[creep.id] ??= 0
-            this.transfers[creep.id] -= power
-            this.transfers[target.id] ??= 0
-            this.transfers[target.id] += power
-
-            this.creepCompletedActions[creep.id].add('work')
-
-            if (this.usedCapacity(creep) >= power * 2) {
-                return ERR_BUSY
-            } else if (this.usedCapacity(creep) >= power) {
-                this.log('manageCreeps', `  - **almost out of resources** looking for container near by`)
-
-                const containerNearBy = this.containers
-                    .filter(c => this.usedCapacity(c) > this.freeCapacity(creep) && creep.pos.isNearToCached(c.pos))
-                    .shift()
-
-                if (containerNearBy) {
-                    this.log('manageCreeps', `  - **found container near by:** ${containerNearBy?.id}`)
-
-                    creep.addTask({ id: containerNearBy.id, action: 'withdraw', blocking: true } as TaskObject, true)
-                    this.creepsByTask.withdraw.push(creep)
-                    return ERR_BUSY
-                } else if (!this.creepCompletedActions[creep.id].has('move')) {
-
-                    // is there a container closer by that we can use?
-                    const containerNearBy = this.containers
-                        .filter(c => this.usedCapacity(c) >= this.freeCapacity(creep) && creep.pos.getRangeToCached(c.pos) < 3)
-                        .shift()
-
-                    if (containerNearBy) {
-                        const directionToContainer = creep.pos.getDirectionTo(containerNearBy.pos)
-
-                        this.log('manageCreeps', `  - **found container near by:** ${containerNearBy?.id}. distance: ${creep.pos.getRangeToCached(containerNearBy.pos)} direction: ${directionToContainer}`)
-
-                        if (OK === creep.move(directionToContainer)) {
-                            this.creepCompletedActions[creep.id].add('move')
-                        }
-
-                        return ERR_BUSY
-                    }
-                }
-
-                this.log('manageCreeps', `  - **out of resources** no container near by`)
-                return ERR_NOT_ENOUGH_RESOURCES
-            }
-        }
-
-        return result
-    }
-
-    private executeRepair(creep: Creep, target: Structure, workPower: number): ScreepsReturnCode {
-        const power = workPower * REPAIR_POWER
-        this.log('manageCreeps', `  - **power:** ${power}`)
-        this.log('manageCreeps', `  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`, `\n  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`)
-
-        if (creep.store.getUsedCapacity(RESOURCE_ENERGY) < power) { // not enough resources
-            this.log('manageCreeps', `  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`)
-            this.log('manageCreeps', `  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`)
-
-            if (this.usedCapacity(creep) >= power) { // wait until next tick for resources to be available
-                this.log('manageCreeps', `  - **wait until next tick for resources to be available**`)
-                return ERR_BUSY
-            } else {
-                this.log('manageCreeps', `  - **not enough resources**`)
-                return ERR_NOT_ENOUGH_RESOURCES
-            }
-        }
-
-        const range = creep.pos.getRangeToCached(target.pos)
-        this.log('manageCreeps', `  - **range:** ${range}`)
-        if (range > 4) { // not in range
-            return ERR_NOT_IN_RANGE
-        }
-
-        if (this.creepCompletedActions[creep.id].has('work')) {
-            this.log('manageCreeps', `  - **work already completed** waiting until next tick`)
-            return ERR_BUSY
-        }
-
-        const result = creep.repair(target)
-        this.log('manageCreeps', `  - **result:** ${result}`)
-
-        if (result === OK && !this.creepCompletedActions[creep.id].has('move')) {
-            const nearestFlag = this.flags.find(f => f.pos.getRangeToCached(target.pos) <= 4)
-            if (nearestFlag) {
-                const result = creep.moveTo(nearestFlag.pos)
-                if (result === OK) {
-                    this.creepCompletedActions[creep.id].add('move')
-                }
-            }
-        }
-
-        if (result === OK) {
-            this.transfers[creep.id] ??= 0
-            this.transfers[creep.id] -= power
-            this.transfers[target.id] ??= 0
-            this.transfers[target.id] += power
-
-            this.creepCompletedActions[creep.id].add('work')
-
-            if (this.usedCapacity(creep) >= power) {
-                return ERR_BUSY
-            } else if (this.usedCapacity(target) === 0) {
-
-                const containerNearBy = this.containers
-                    .filter(c => this.usedCapacity(c) > this.freeCapacity(creep))
-                    .sort((a, b) => a.pos.getRangeToCached(target.pos) - b.pos.getRangeToCached(target.pos))
-                    .shift()
-
-                if (containerNearBy) {
-                    creep.addTask({ id: containerNearBy.id, action: 'withdraw', waiting: true } as TaskObject, true)
-                    this.creepsByTask.withdraw.push(creep)
-                    return ERR_BUSY
-                }
-
-                this.log('manageCreeps', `  - **out of resources**`)
-                return ERR_NOT_ENOUGH_RESOURCES
-            }
-        }
-
-        return result
-    }
-
-    private executeTransfer(creep: Creep, target: Structure<StructureConstant>, amount: number | undefined = undefined): ScreepsReturnCode {
-        this.log('manageCreeps', `  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`, `\n  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`)
-
-        // if transfering to a container near spawn, and room not at full capacity, return
-        // we got here because a creep was assigned to transfer to a container near spawn, but the room is not at full capacity since assigned to a refillable
-        if (this.containersNearSpawns.some(c => c.id === target.id) && this.energyAvailable < this.energyCapacityAvailable) {
-            return ERR_INVALID_TARGET
-        }
-
-        if (this.usedCapacity(creep) === 0) {
-            this.log('manageCreeps', `  - **not enough resources**`)
-            return ERR_NOT_ENOUGH_RESOURCES
-        }
-
-        if (this.freeCapacity(target) === 0) {
-            this.log('manageCreeps', `  - **full**`)
-            return ERR_FULL
-        }
-
-        if (!creep.pos.isNearToCached(target.pos)) { // not in range
-            this.log('manageCreeps', `  - **not in range**`)
-            return ERR_NOT_IN_RANGE
-        }
-
-        if (this.creepCompletedActions[creep.id].has('transfer')) {
-            this.log('manageCreeps', `  - **transfer already completed** waiting until next tick`)
-            return ERR_BUSY
-        }
-
-        if (creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
-            if (this.usedCapacity(creep) > 0) {
-                this.log('manageCreeps', `  - **wait until next tick for resources to be available**`)
-                return ERR_BUSY // wait until next tick for resources to be available
-            } else {
-                this.log('manageCreeps', `  - **not enough resources**`)
-                return ERR_NOT_ENOUGH_RESOURCES // done
-            }
-        }
-
-        amount = amount ?? Math.min((target as StructureContainer).store.getFreeCapacity(RESOURCE_ENERGY), creep.store.getUsedCapacity(RESOURCE_ENERGY))
-
-        const result = creep.transfer(target, RESOURCE_ENERGY, amount)
-
-        if (result === OK) {
-            this.log('manageCreeps', `  - **transferred:** amount: ${amount} target: ${target.id}`)
-
-            this.transfers[creep.id] ??= 0
-            this.transfers[creep.id] -= amount
-            this.transfers[target.id] ??= 0
-            this.transfers[target.id] += amount
-
-            this.creepCompletedActions[creep.id].add('transfer')
-        }
-
-        return result
-    }
-
-    private executeWithdraw(creep: Creep, target: StructureContainer): ScreepsReturnCode {
-        this.log('manageCreeps', `  - **freeCapacity:** ${this.freeCapacity(creep)}/${creep.store.getFreeCapacity(RESOURCE_ENERGY)}`, `\n  - **usedCapacity:** ${this.usedCapacity(creep)}/${creep.store.getUsedCapacity(RESOURCE_ENERGY)}`)
-
-        if (creep.store.getFreeCapacity(RESOURCE_ENERGY) === 0) {
-            if (this.freeCapacity(creep) > 0) {
-                this.log('manageCreeps', `  - **wait until next tick for resources to be available**`)
-                return ERR_BUSY // wait until next tick for resources to be available
-            } else {
-                this.log('manageCreeps', `  - **not enough resources**`)
-                return ERR_NOT_ENOUGH_RESOURCES // done
-            }
-        }
-
-        if (target.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
-            if (this.usedCapacity(target) > 0) {
-                this.log('manageCreeps', `  - **wait until next tick for resources to be available**`)
-                return ERR_BUSY // wait until next tick for resources to be available
-            } else {
-                this.log('manageCreeps', `  - **not enough resources**`)
-                return ERR_NOT_ENOUGH_RESOURCES // done
-            }
-        }
-
-        if (!creep.pos.isNearToCached(target.pos)) { // not in range
-            this.log('manageCreeps', `  - **not in range**`)
-            return ERR_NOT_IN_RANGE
-        }
-
-        if (this.creepCompletedActions[creep.id].has('transfer')) {
-            this.log('manageCreeps', `  - **transfer already completed** waiting until next tick`)
-            return ERR_BUSY
-        }
-
-        const amount = Math.min(target.store.getUsedCapacity(RESOURCE_ENERGY), creep.store.getFreeCapacity(RESOURCE_ENERGY))
-
-        const result = creep.withdraw(target, RESOURCE_ENERGY)
-
-        if (result === OK) {
-            this.log('manageCreeps', `  - **withdrew:** ${target.id} amount: ${amount}`)
-
-            this.transfers[creep.id] ??= 0
-            this.transfers[creep.id] += amount
-            this.transfers[target.id] ??= 0
-            this.transfers[target.id] -= amount
-
-            this.creepCompletedActions[creep.id].add('transfer')
-        }
-
-        return result
-    }
-
-    private executeRenew(creep: Creep, target: StructureSpawn): ScreepsReturnCode {
-        if (creep.ticksToLive && creep.ticksToLive > 1400 || this.energyAvailable < this.energyCapacityAvailable) {
-            return ERR_INVALID_TARGET
-        }
-
-        if (!creep.pos.isNearToCached(target.pos)) { // not in range
-            this.log('manageCreeps', `  - **not in range**`)
-            return ERR_NOT_IN_RANGE
-        }
-
-        const result = target.renewCreep(creep)
-
-        if (result === ERR_NOT_ENOUGH_RESOURCES) {
-            return ERR_BUSY
-        }
-        else if (result === OK) {
-            const creepCost = creep.body.reduce((sum, part) => sum + BODYPART_COST[part.type], 0)
-            const costToRenew = Math.ceil(creepCost / 2.5 / creep.body.length)
-
-            this.log('manageCreeps', `  - **cost to renew:** ${costToRenew}`)
-
-            this.transfers[target.id] ??= 0
-            this.transfers[target.id] -= costToRenew
-
-            if (this.usedCapacity(creep) > 0 && !creep.hasTaskByAction('transfer') && !creep.hasTaskByAction('withdraw')) {
-                creep.addTask({
-                    id: target.id,
-                    action: 'transfer',
-                    blocking: true,
-                } as TaskObject, true)
-                this.creepsByTask.transfer.push(creep)
-
-                if (this.freeCapacity(creep) > 0) {
-                    const containerNearBy = this.containersNearSpawns
-                        .filter(c => this.usedCapacity(c) > 0 && c.pos.isNearToCached(creep.pos))
-                        .shift()
-
-                    if (containerNearBy) {
-                        creep.addTask({
-                            id: containerNearBy.id,
-                            action: 'withdraw',
-                            blocking: true,
-                        } as TaskObject, true)
-                        this.creepsByTask.withdraw.push(creep)
-                    }
-                }
-            }
-
-            // if (this.usedCapacity(target) < costToRenew) {
-            //     return OK
-            // }
-
-            return ERR_BUSY
-        }
-
-        return result
-    }
-
-    private setupCreepRoles() {
-        this.startLogs('manageRoles')
-
-        const maxBodyParts = (bodyParts: BodyPartConstant[], limit: number = 800): BodyPartConstant[] => {
-            const cost = (bodyParts: BodyPartConstant[]) => bodyParts.reduce((sum, part) => sum + BODYPART_COST[part], 0)
-            let body = [...bodyParts]
-
-            while (cost(body.concat(bodyParts)) <= Math.min(limit, this.energyCapacityAvailable)) {
-                body = body.concat(bodyParts)
-            }
-
-            return body
-        }
-
-        const calculateDefender = (): { body: BodyPartConstant[], max: number } => {
-            if (this.controllerLevel < 3) return { body: [], max: 0 }
-
-            const energyAvailable = Math.min(1200, Math.min(300, this.energyCapacityAvailable))
-            const body = buildCreepBody(1200, { tough: 1, move: 7, attack: 2, ranged_attack: 2, heal: 1 }, 0, 6)
-                .sort((a, b) => {
-                    if (a === TOUGH) return 1
-                    if (b === TOUGH) return -1
-                    if (a === RANGED_ATTACK) return 1
-                    if (b === RANGED_ATTACK) return -1
-                    if (a === ATTACK) return 1
-                    if (b === ATTACK) return -1
-                    if (a === MOVE) return 1
-                    if (b === MOVE) return -1
-                    if (a === HEAL) return 1
-                    if (b === HEAL) return -1
-
-                    return 0
-                }).reverse()
-
-            let maxDefenders = 0
-
-            const myRooms = Object.values(Game.rooms).filter(r => r.controller?.my)
-
-            const totalEnemiesAcrossAllRooms = myRooms.reduce((sum, room) => sum + (room.find(FIND_HOSTILE_CREEPS).length || 0), 0)
-
-            if (totalEnemiesAcrossAllRooms > 0) {
-                maxDefenders = Math.min(3, Math.floor(totalEnemiesAcrossAllRooms / 2))
-            }
-
-            return { body, max: maxDefenders }
-        }
-
-        const calculateHarvester = (): { body: BodyPartConstant[], max: number } => {
-            const energyAvailable = Math.min(900, this.energyCapacityAvailable)
-            const body = buildCreepBody(energyAvailable, { move: 1, work: 1.5, carry: 0.75 }, UPGRADE_CONTROLLER_POWER, 8)
-            const workPower = body.filter(p => p === WORK).length * UPGRADE_CONTROLLER_POWER
-            const maxHarvesters = Math.floor(((3000 / 250) * this.sourcesActive.length) / workPower) // max is based on workPower
-
-            this.log('manageRoles', `  - **maxHarvesters:** ${maxHarvesters}`)
-
-            let wantedHarvesters = this.sourceWalkablePositionsTotal
-            this.log('manageRoles', `  - **sourceWalkablePositionsTotal:** ${this.sourceWalkablePositionsTotal}`)
-
-            // this.creepsByRole.upgrader
-            //     .filter(c => !this.usedCapacity(c))
-            //     .forEach(() => maxUpgraders -= 2)
-
-            // early game
-            if (this.controllerLevel <= 2 && this.constructionSites.length > 0 && !this.creepsByRole.builder.length) {
-                wantedHarvesters += 2
-            }
-
-            this.log('manageRoles', `  - **creepsByRole.harvester:** ${this.creepsByRole.harvester.length}`)
-
-            if (this.creepsByRole.harvester.some(c => !c.memory.tasks || !c.memory.tasks.length)) {
-                wantedHarvesters -= 1
-            }
-
-            if (this.containersNearSources.length && this.containersNearSources.every(c => this.usedCapacity(c) > 1800)) {
-                wantedHarvesters -= Math.floor(maxHarvesters * 0.2)
-            }
-
-            this.log('manageRoles', `  - **wantedHarvesters:** ${wantedHarvesters}`)
-
-            return { body, max: Math.max(1, Math.min(maxHarvesters, wantedHarvesters)) }
-        }
-
-        const calculateUpgrader = (): { body: BodyPartConstant[], max: number } => {
-            if (!this.containersNearController.length) return { body: [], max: 0 }
-
-            const energyAvailable = Math.min(800, this.energyCapacityAvailable)
-            const body = buildCreepBody(energyAvailable, { move: 1, work: 1.5, carry: 0.75 }, UPGRADE_CONTROLLER_POWER, 6)
-            const workPower = body.filter(p => p === WORK).length * UPGRADE_CONTROLLER_POWER
-            const maxUpgraders = Math.floor(12 / workPower) // max is based on workPower being below 12
-
-            let wantedUpgraders = this.controllerLevel >= 3 ? 1 : 0
-
-            // this.creepsByRole.upgrader
-            //     .filter(c => !this.usedCapacity(c))
-            //     .forEach(() => maxUpgraders -= 2)
-            if (this.energyAvailable === this.energyCapacityAvailable && !this.creepsByRole.builder.length && this.sourcesActive.length >= 2) {
-                this.containersNearController
-                    .filter(c => this.usedCapacity(c) > 1900)
-                    .forEach(() => wantedUpgraders += 1)
-
-                this.containersNearSources
-                    .filter(c => this.usedCapacity(c) > 1500)
-                    .forEach(() => wantedUpgraders += 1)
-
-                if (this.containers.length >= 3 && this.containers.every(c => this.usedCapacity(c) > 1000)) {
-                    wantedUpgraders += Math.floor(this.containers.length / 2)
-                }
-            }
-
-            return { body, max: Math.min(maxUpgraders, wantedUpgraders) }
-        }
-
-        const calculateMule = (): { body: BodyPartConstant[], max: number } => {
-            const energyAvailable = Math.min(800, Math.min(200, this.energyCapacityAvailable))
-            const body = buildCreepBody(energyAvailable, { move: 1, carry: 1 }, 0, 6)
-            const workPower = body.filter(p => p === WORK).length * UPGRADE_CONTROLLER_POWER
-
-            let wantedMules = 0
-
-            if (this.creepsByRole.harvester.length > 0 && this.sourcesActive.length >= 1) {
-                // if there are containers near sources with more than 400 energy and there are refillables, add 1 mule
-                if (this.containers.some(c => this.usedCapacity(c) > 400) && this.refillables.length > 0) {
-                    wantedMules += 1
-                }
-
-                // if there are 2 containers near sources with more than 1000 energy and 1 container near spawns with more than 1000 free capacity, add 1 mule
-                if (this.containersNearSources.length >= 2 && this.containersNearSources.every(c => this.usedCapacity(c) > 1000) && this.containersNearSpawns.length >= 1 && this.containersNearSpawns.some(c => this.freeCapacity(c) >= 1000)) {
-                    wantedMules += 1
-                }
-            }
-
-            if (this.creepsByRole.builder.length) {
-                wantedMules += 1 // help cover the builders
-            }
-
-            return { body, max: wantedMules }
-        }
-
-        const calculateBuilder = (): { body: BodyPartConstant[], max: number } => {
-            if (this.controllerLevel < 2.3 || !this.constructionSites.length) return { body: [], max: 0 }
-
-            const energyAvailable = Math.min(500, this.energyCapacityAvailable)
-            const body = buildCreepBody(energyAvailable, { move: 1, work: 1.5, carry: 0.75 }, UPGRADE_CONTROLLER_POWER, 6)
-            const workPower = body.filter(p => p === WORK).length * UPGRADE_CONTROLLER_POWER
-            const maxBuilders = Math.floor(12 / workPower) // max is based on workPower being below 12
-
-            let wantedBuilders = 0
-
-            if (
-                this.energyAvailable === this.energyCapacityAvailable
-                && this.constructionSites.length
-                && (!this.creepsByRole.harvester || this.creepsByTask.harvest.length === this.creepsByRole.harvester.length)
-                && this.sourcesActive.length >= 2
-            ) {
-                wantedBuilders += 1
-
-                if (this.sourcesActive.length > 1 && this.constructionSites.length > 1 && this.creepsByTask.harvest.length < this.sourceWalkablePositionsTotal) {
-                    wantedBuilders += 1
-                }
-
-                if (this.containersNearSources.filter(c => this.usedCapacity(c) > 1000).length) {
-                    wantedBuilders += 1
-                }
-            }
-
-            return { body, max: Math.min(maxBuilders, wantedBuilders) }
-        }
-
-        function buildCreepBody(
-            energyAvailable: number,
-            partsRatio: { [key in BodyPartConstant]?: number },
-            workRatePerPart: number = 2,
-            maxWorkRate?: number // Optional cap on WORK parts (max energy/tick)
-        ): BodyPartConstant[] {
-            const body: BodyPartConstant[] = []
-            let remainingEnergy = energyAvailable
-
-            // Convert ratio object into an array and filter valid parts
-            const validParts = Object.entries(partsRatio) as [BodyPartConstant, number][]
-            if (validParts.length === 0) return []
-
-            // Normalize the ratios so the smallest value is 1
-            const minRatio = Math.min(...validParts.map(([, ratio]) => ratio))
-            const scaledRatios = validParts.map(([part, ratio]) => [part, ratio / minRatio] as [BodyPartConstant, number])
-
-            // Calculate the cost of one full ratio set
-            const unitCost = scaledRatios.reduce((sum, [part, ratio]) => sum + BODYPART_COST[part] * ratio, 0)
-
-            // Determine how many full sets fit within available energy
-            let maxFullSets = Math.floor(energyAvailable / unitCost)
-            remainingEnergy -= maxFullSets * unitCost
-
-            // Track WORK parts to respect `maxWorkRate`
-            let totalWorkParts = 0
-            const canAddWork = () => maxWorkRate === undefined || (totalWorkParts + 1) * workRatePerPart <= maxWorkRate
-
-            // Add full sets while respecting max work rate
-            for (let i = 0; i < maxFullSets; i++) {
-                scaledRatios.forEach(([part, ratio]) => {
-                    const partCount = Math.floor(ratio) // Ensure an integer amount
-                    for (let j = 0; j < partCount; j++) {
-                        if (part === WORK && !canAddWork()) continue // Respect maxWorkRate
-                        body.push(part)
-                        if (part === WORK) totalWorkParts++
-                    }
-                })
-            }
-
-            // Add extra parts dynamically to fill up remaining energy
-            while (true) {
-                let addedPart = false
-                for (const [part, ratio] of scaledRatios) {
-                    if (remainingEnergy >= BODYPART_COST[part] && (part !== WORK || canAddWork())) {
-                        body.push(part)
-                        remainingEnergy -= BODYPART_COST[part]
-                        if (part === WORK) totalWorkParts++
-                        addedPart = true
-                    }
-                }
-                if (!addedPart) break // Stop if no more parts can be added
-            }
-
-            return body.sort()
-        }
-
-        const calculateClaimer = (): { body: BodyPartConstant[], max: number } => {
-            if (this.controllerLevel < 3) return { body: [], max: 0 }
-
-            const wantedRooms = Object.entries(CONFIG.rooms).filter(([roomName, room]) => {
-                if (roomName === 'default') return false
-
-                if (Game.rooms[roomName]?.controller?.my) {
-                    return false
-                }
-
-                return true
-            })
-
-            if (wantedRooms.length === 0) return { body: [], max: 0 }
-
-            this.log('manageRoles', `  - **claimer:** ${wantedRooms.map(([roomName]) => roomName).join(', ')}`)
-
-            return {
-                body: [CLAIM, MOVE, MOVE],
-                max: 1
-            }
-        }
-
-
-
-        this.creepsSetup.harvester = calculateHarvester()
-        this.creepsSetup.upgrader = calculateUpgrader()
-        this.creepsSetup.mule = calculateMule()
-        this.creepsSetup.builder = calculateBuilder()
-        this.creepsSetup.scout = {
-            body: [MOVE, MOVE],
-            max: this.controllerLevel > 3 ? 1 : 0
-        }
-        //this.creepsSetup.claimer = calculateClaimer()
-        this.creepsSetup.defender = calculateDefender()
-
-
-
-        this.log('manageRoles', `  - **creepsSetup:**${Object.entries(this.creepsSetup).map(([role, { body, max }]) => `\n    - **${role}** (${max}): ${body.join(', ')}`).join('')}`)
+    assignedToUpgrade(): Creep[] {
+        return this.creeps.filter(c => c.hasTaskByAction('upgrade'))
     }
 
     private manageCreeps() {
-        this.startLogs('manageCreeps')
-        this.log('manageCreeps', `#00fff4[**manageCreeps:**] total: ${this.creeps.length}`)
+        if (this.config.debug) this.startLogs('manageCreeps')
+        if (this.config.debug) this.log('manageCreeps', `#00fff4[**manageCreeps:**] total: ${this.creeps.length}`)
 
-        this.creepCompletedActions = {}
-
-        const spawn = this.spawns.find(s => !s.spawning && !this.freeCapacity(s))
-
-        this.creeps.forEach(creep => {
-            this.transfers[creep.id] ??= 0
-
-            this.creepCompletedActions[creep.id] = new Set<ActionTypes>()
-
-            // renew mules
-            if (spawn && creep.role === 'mule' && creep.ticksToLive && creep.ticksToLive < 150 && !this.creeps.some(c => c.hasTaskByAction('renew')) && this.energyAvailable === this.energyCapacityAvailable) {
-                const bodyParts = creep.body.map(b => b.type)
-                const roleBodyParts = this.creepsSetup[creep.role as keyof typeof this.creepsSetup].body
-                if (JSON.stringify(bodyParts) === JSON.stringify(roleBodyParts)) {
-                    this.log('manageCreeps', `  - #00fff4[**renew:**] ${creep.name}`)
-                    creep.tasks = [{
-                        action: 'renew',
-                        id: spawn.id,
-                        persistent: true,
-                    } as TaskObject]
-                    return
-                }
-            }
-        })
+        const totalMules = this.creepsByRole.mule.filter(c => !c.spawning).length
 
         // pickup resources
-        this.droppedResources.forEach(resource => {
+        for (const resource of this.droppedResources) {
+            if (this.usedCapacity(resource) === 0) continue
+
             const nearByCreeps = this.creeps
-                .filter(c => this.freeCapacity(c) > 0 && c.pos.isNearToCached(resource.pos))
+                .filter(c => this.freeCapacity(c) > 0 && c.pos.isNearToCached(resource.pos) && !c.hasTaskByAction('pickup') && !c.hasTaskByAction('withdraw'))
 
             for (const creep of nearByCreeps) {
-                if (!this.freeCapacity(creep)) continue
-                if (creep.hasTaskByAction('pickup')) continue
-
-                this.log('manageCreeps', `  - #00fff4[**pickup:**] ${creep.name}`)
+                if (this.freeCapacity(creep) === 0 || this.usedCapacity(resource) === 0) break
+                if (this.config.debug) this.log('manageCreeps', `  - #00fff4[**pickup:**] ${creep.name}`)
 
                 creep.addTask({
                     id: resource.id,
                     action: 'pickup',
                     blocking: true,
                 } as TaskObject, true)
-                this.creepsByTask.pickup.push(creep)
             }
-        })
+        }
 
-        // harvesters transfer resources to containers near sources
-        if (this.creepsByRole.mule.length > 0) {
-            this.containersNearSources.forEach(container => {
-                if (!this.freeCapacity(container)) return
-                if (this.creepsByRole.upgrader.length === 0 && this.usedCapacity(container) >= 600) return
+        // withdraw resources
+        for (const tombstone of this.tombstones) {
+            if (this.usedCapacity(tombstone) === 0) continue
 
-                const transferFactor = this.creepsByRole.mule.some(c => this.usedCapacity(c) === 0) ? 0 : 0.5
+            const nearByCreeps = this.creeps
+                .filter(c => this.freeCapacity(c) > 0 && c.pos.isNearToCached(tombstone.pos) && !c.hasTaskByAction('withdraw') && !c.hasTaskByAction('transfer') && !c.hasTaskByAction('pickup'))
 
-                const harvestersNearBy = this.creeps
-                    .filter(c =>
-                        c.role === 'harvester' &&
-                        (this.usedCapacity(c) >= (c.store.getCapacity(RESOURCE_ENERGY) * transferFactor) || this.creepsByRole.mule.some(m => c.pos.getRangeToCached(m.pos) < 3)) &&
-                        c.pos.isNearToCached(container.pos) &&
-                        c.hasTaskByAction('harvest')
-                    )
+            for (const creep of nearByCreeps) {
+                if (this.freeCapacity(creep) === 0 || this.usedCapacity(tombstone) === 0) break
+                if (this.config.debug) this.log('manageCreeps', `  - #00fff4[**withdraw:**] ${creep.name}`)
 
-                for (const creep of harvestersNearBy) {
-                    if (!this.usedCapacity(creep)) continue
+                creep.addTask({
+                    id: tombstone.id,
+                    action: 'withdraw',
+                    blocking: true,
+                } as TaskObject, true)
+            }
+        }
 
-                    this.log('manageCreeps', `  - #00fff4[**transfer:**] ${creep.name} to ${container.id}`)
+        // harvesters
+        for (const creep of this.creepsByRole.harvester) {
+            if (!creep.hasTaskByAction('upgrade')) continue
+
+            const isHarvesting = this.assignedToHarvest().includes(creep)
+
+            // harvesters transfer energy to links
+            if (isHarvesting && creep.store.getUsedCapacity(RESOURCE_ENERGY) > creep.workPower('harvest') * 3) {
+                const linkNearBy = this.linksNearSources.find(l => l.pos.isNearToCached(creep.pos))
+                if (linkNearBy) {
+                    if (this.config.debug) this.log('manageCreeps', `  - **linkNearBy:** ${linkNearBy}`)
 
                     creep.addTask({
-                        id: container.id,
+                        id: linkNearBy.id,
                         action: 'transfer',
                         blocking: true,
                     } as TaskObject, true)
 
-                    this.creepsByTask.transfer.push(creep)
+                    continue
                 }
-            })
+            }
+
+            // if more than half full, or over 50 energy, retask to harvesting
+            if (isHarvesting && (this.usedCapacity(creep) > this.getCapacity(creep) * 0.5 || this.usedCapacity(creep) > 50)) {
+                const source = this.sources.find(s =>
+                    (s.energy > 0 || s.ticksToRegeneration < creep.pos.getRangeToCached(s.pos)) // has energy or is about to regenerate
+                    && s.walkablePositions > this.creepsByRole.harvester.filter(c => c.hasTask('harvest', s.id)).length // has enough walkable positions
+                )
+                if (!source) continue
+
+                if (this.config.debug) this.log('manageCreeps', `  - **retasking to harvesting:** ${creep.name}`)
+
+                creep.tasks = []
+                creep.addTask({
+                    id: source.id,
+                    action: 'harvest',
+                } as TaskObject)
+
+                continue
+            }
         }
 
         // Upgraders share resources among each other
-        this.creepsByRole.upgrader.forEach(creep => {
-            if (this.usedCapacity(creep) === 0 || creep.hasTaskByAction('transfer')) return
+        for (const creep of this.creepsByRole.upgrader) {
+            const isUpgrading = this.assignedToUpgrade().includes(creep)
+            if (!isUpgrading) continue
 
-            this.log('manageCreeps', `  - **reviewing:** ${creep.name}`)
+            if (this.config.debug) this.log('manageCreeps', `  - **reviewing:** ${creep.name}`)
 
-            // Find nearby upgraders
-            const nearbyUpgraders = this.creepsByTask.upgrade.filter(other =>
-                other.id !== creep.id && creep.pos.inRangeToCached(other.pos, 1)
-            )
-
-            this.log('manageCreeps', `  - **nearby upgraders:**`, nearbyUpgraders.map(u => u.name).join(', '))
-
-            // Check if any nearby upgrader has excess resources
-            const recipient = nearbyUpgraders.find(other => this.usedCapacity(other) > other.store.getCapacity(RESOURCE_ENERGY) * 0.5)
-
-            if (recipient) {
-                this.log('manageCreeps', `  - **donor:** ${recipient.name}`)
-
-                recipient.tasks.push({
-                    id: creep.id,
-                    action: 'transfer',
-                    blocking: true,
-                    amount: Math.ceil(this.usedCapacity(recipient) * 0.5),
-                } as TaskObject)
-            }
-
-            if (this.usedCapacity(creep) === 0 || !creep.hasTaskByAction('upgrade') || creep.hasTaskByAction('transfer') || creep.hasTaskByAction('withdraw')) return
-
+            // check if there is a container near by
             const containerNearBy = this.containersNearController
                 .filter(c => this.usedCapacity(c) > 0 && c.pos.isNearToCached(creep.pos))
                 .shift()
 
             if (containerNearBy) {
-                this.log('manageCreeps', `    - #00ff84[**auto withdraw:**] ${containerNearBy}`)
+                if (this.config.debug) this.log('manageCreeps', `    - #00ff84[**auto withdraw:**] ${containerNearBy}`)
 
                 creep.addTask({
                     id: containerNearBy.id,
@@ -2052,46 +705,54 @@ class RoomHivemind {
                     blocking: true,
                 } as TaskObject, true)
 
-                this.creepsByTask.withdraw.push(creep)
+                continue
             }
-        })
 
-        // manage creeps
-        this.creeps.forEach(creep => {
-            // run the task manager
-            this.manageCreepTasks(creep)
-        })
+            // Find nearby upgraders
+            const recipient = this.creepsByTask.upgrade.find(other =>
+                other.id !== creep.id &&
+                creep.pos.inRangeToCached(other.pos, 1) &&
+                other.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+            )
+
+            if (this.config.debug) this.log('manageCreeps', `  - **nearby upgraders:** ${recipient}`)
+
+            if (recipient) {
+                if (this.config.debug) this.log('manageCreeps', `  - **donor:** ${recipient.name}`)
+
+                recipient.tasks.push({
+                    id: creep.id,
+                    action: 'transfer',
+                    blocking: true,
+                    amount: Math.floor(this.usedCapacity(creep) * 0.45),
+                } as TaskObject)
+
+                continue
+            }
+        }
     }
 
     private manageSpawns() {
-        this.setupCreepRoles() // build the roles
+        if (this.config.debug) this.startLogs('manageSpawns')
+        if (this.config.debug) this.log('manageSpawns', `#00fff4[**manageSpawns:**] total: ${this.spawns.length}`)
 
-        this.startLogs('manageSpawns')
-        this.log('manageSpawns', `#00fff4[**manageSpawns:**] total: ${this.spawns.length}`)
-
-        this.spawns.forEach(spawn => {
-            this.log('manageSpawns', `**spawn**: ${spawn.name}`, `\n  - usedCapacity: ${spawn.store.getUsedCapacity(RESOURCE_ENERGY)}`, `\n  - spawning: ${!!spawn.spawning}`)
+        for (const spawn of this.spawns) {
+            if (this.config.debug) this.log('manageSpawns', `**spawn**: ${spawn.name}`, `\n  - usedCapacity: ${spawn.store.getUsedCapacity(RESOURCE_ENERGY)}`, `\n  - spawning: ${!!spawn.spawning}`)
 
             if (spawn.store.getFreeCapacity(RESOURCE_ENERGY) > 0) {
                 this.transfers[spawn.id] = 1 // spawn regens 1 energy per tick
             }
 
             if (spawn.spawning || this.energyAvailable < 200) {
-                this.log('manageSpawns', `  - **spawning** or **usedCapacity** < 200`)
+                if (this.config.debug) this.log('manageSpawns', `  - **spawning** or **usedCapacity** < 200`)
                 return
             }
 
-            const role = Object.keys(this.creepsSetup).find(role => {
+            const role = CREEP_ROLES.find(role => {
                 const creeps = this.creepsByRole[role]
                 return creeps.length < this.creepsSetup[role as keyof typeof this.creepsSetup].max
             })
-
-            if (role) {
-                this.log('manageSpawns', `  - **role:** ${role}`)
-            } else {
-                this.log('manageSpawns', `  - **no roles to spawn**`)
-            }
-
+            if (this.config.debug) this.log('manageSpawns', `  - **role:** ${role ? role : 'no roles to spawn'}`)
             if (!role) return
 
             const body = this.creepsSetup[role as keyof typeof this.creepsSetup].body
@@ -2105,7 +766,7 @@ class RoomHivemind {
 
             name = `${name}${i}`
 
-            this.log('manageSpawns', `  - **spawnCreep:** ${name}`, `\n    - **body:** ${body}`, `\n    - **max:** ${max}`)
+            if (this.config.debug) this.log('manageSpawns', `  - **spawnCreep:** ${name}`, `\n    - **body:** ${body}`, `\n    - **max:** ${max}`)
 
             const result = spawn.spawnCreep(body, name, { memory: { role: role as CreepRole, room: this.room.name, tasks: [] } })
 
@@ -2114,133 +775,93 @@ class RoomHivemind {
                 this.transfers[spawn.id] ??= 0
                 this.transfers[spawn.id] -= cost
             } else {
-                this.log('manageSpawns', `  - **spawnCreep failed:** ${result}`)
+                if (this.config.debug) this.log('manageSpawns', `  - **spawnCreep failed:** ${result}`)
             }
-        })
+        }
     }
 
     private manageTowers() {
-        this.startLogs('manageTowers')
-        this.log('manageTowers', `#00fff4[**manageTowers:**] total: ${this.towers.length}`)
+        if (this.config.debug) this.startLogs('manageTowers')
+        if (this.config.debug) this.log('manageTowers', `#00fff4[**manageTowers:**] total: ${this.towers.length}`)
 
         this.towers.forEach(tower => {
             if (this.usedCapacity(tower) === 0) {
                 return
             }
 
-            this.log('manageTowers', `  - **tower:** ${tower.id}`, `\n    - **freeCapacity:** ${this.freeCapacity(tower)}`, `\n    - **usedCapacity:** ${this.usedCapacity(tower)}`)
+            if (this.config.debug) this.log('manageTowers', `  - **tower:** ${tower.id}`, `\n    - **freeCapacity:** ${this.freeCapacity(tower)}`, `\n    - **usedCapacity:** ${this.usedCapacity(tower)}`)
 
             if (this.enemies.length > 0) {
                 const result = tower.attack(this.enemies[0])
-                this.log('manageTowers', `  - **attack result:** ${result}`)
+                if (this.config.debug) this.log('manageTowers', `  - **attack result:** ${result}`)
             } else {
                 const creepsNeedHealing = this.creeps.filter(c => c.hits < c.hitsMax)
                 if (creepsNeedHealing.length > 0) {
                     const result = tower.heal(creepsNeedHealing[0])
-                    this.log('manageTowers', `  - **heal result:** ${result}`)
-                } else if (this.usedCapacity(tower) > 800 && this.creepsByRole.mule.length > 1 && this.needsRepair.length > 0 && this.containersNearSpawns.every(c => this.usedCapacity(c) > 1900) && this.sourcesActive.length >= 2) {
+                    if (this.config.debug) this.log('manageTowers', `  - **heal result:** ${result}`)
+                } else if (
+                    this.usedCapacity(tower) > 800
+                    && this.creepsByRole.mule.length > 1
+                    && this.needsRepair.length > 0
+                    && this.containersNearSources.every(c => this.usedCapacity(c) > 1000)
+                    && this.sourcesActive.length >= 2
+                ) {
                     const result = tower.repair(this.needsRepair[0])
 
                     if (result === OK) {
                         this.needsRepair.shift()
                     }
 
-                    this.log('manageTowers', `  - **repair result:** ${result}`)
+                    if (this.config.debug) this.log('manageTowers', `  - **repair result:** ${result}`)
                 }
             }
         })
     }
 
-    private manageBuilding() {
-        if (!this.config.build.enabled) return
-        // if (this.room.memory.buildables && Game.time % 20 !== 0) return
+    private manageLinks() {
+        if (this.config.debug) this.startLogs('manageLinks')
+        if (this.config.debug) this.log('manageLinks', `#00fff4[**manageLinks:**] total: ${this.links.length}`)
 
-        this.startLogs('manageConstruction')
+        // this.links.forEach(link => {
+        //     if (this.config.debug) this.log('manageLinks', `  - **link:** ${link.id}`, `\n    - **freeCapacity:** ${this.freeCapacity(link)}`, `\n    - **usedCapacity:** ${this.usedCapacity(link)}`)
+        // })
+
+        this.linksNearSources.forEach(link => {
+            if (this.config.debug) this.log('manageLinks', `  - **link:** ${link.id}`, `\n    - **freeCapacity:** ${this.freeCapacity(link)}`, `\n    - **usedCapacity:** ${this.usedCapacity(link)}`)
+
+            if (link.cooldown > 0) return
+
+            // First try to find a link near spawns that needs energy
+            let targetLink = this.linksNearSpawns
+                .filter(l => !l.cooldown && this.freeCapacity(l) > 10)
+                .sort((a, b) => this.freeCapacity(b) - this.freeCapacity(a))
+                .shift()
+
+            // If no spawn links need energy, try controller links
+            if (!targetLink) {
+                targetLink = this.linksNearController
+                    .filter(l => !l.cooldown && this.freeCapacity(l) > 10)
+                    .sort((a, b) => this.freeCapacity(b) - this.freeCapacity(a))
+                    .shift()
+            }
+
+            if (targetLink) {
+                const result = link.transferEnergy(targetLink)
+                if (this.config.debug) this.log('manageLinks', `  - **transfer result:** ${result}`)
+            }
+        })
+    }
+
+    private manageBuilding() {
+        if (!this.config.build) return
+        if (this.room.memory.buildables && Game.time % this.config.build.build_frequency !== 0) return
+        if (!this.spawn) return
+
+        if (this.config.debug) this.startLogs('manageConstruction')
 
         this.room.memory.buildables ??= []
 
-        if (!this.spawn) return
-
-        const isWalkable = (x: number, y: number): boolean => {
-            // Check if coordinates are out of bounds
-            if (x < 0 || x > 49 || y < 0 || y > 49) return false
-
-            if (this.constructionSites.some(cs => cs.pos.x === x && cs.pos.y === y)) return false
-            if (this.structures.some(cs => cs.pos.x === x && cs.pos.y === y)) return false
-
-            // // Look at the specified position in the room
-            // const lookResults = this.room.lookAt(x, y)
-
-            // // Determine if the position is walkable
-            // return !lookResults.some(({ type, terrain, structure, constructionSite }) => {
-            //     // Check for impassable structures or terrain
-            //     if (type === "structure" && structure!.structureType === STRUCTURE_RAMPART) return true
-            //     if (type === "constructionSite" && constructionSite!.structureType !== 'road') return true
-            //     if (type === "terrain" && terrain === "wall") return true
-            //     return false
-            // })
-
-            return true
-        }
-
-        const adjacentPositions = (position: RoomPosition, distance: number = 1): RoomPosition[] => {
-            const adjacentPositions: RoomPosition[] = []
-
-            // Get all positions at exact distance
-            for (let dx = -distance; dx <= distance; dx++) {
-                for (let dy = -distance; dy <= distance; dy++) {
-                    // filter out of bounds
-                    if (position.x + dx < 0 || position.x + dx > 49 || position.y + dy < 0 || position.y + dy > 49) continue
-
-                    // only include positions at exact distance
-                    const range = Math.abs(dx) + Math.abs(dy)
-                    if (range !== distance) continue
-
-                    // filter out non-walkable positions
-                    if (!isWalkable(position.x + dx, position.y + dy)) continue
-
-                    adjacentPositions.push(new RoomPosition(position.x + dx, position.y + dy, position.roomName))
-                }
-            }
-
-            return adjacentPositions
-        }
-
-        const findOptimalPosition = (position: RoomPosition, distance: number = 1): RoomPosition | undefined => {
-            const optimalPosition = adjacentPositions(position, distance)
-                .map((pos) => ({
-                    pos,
-                    visibleTiles: (() => {
-                        let spots = 0
-
-                        for (let dx = -distance; dx <= distance; dx++) {
-                            for (let dy = -distance; dy <= distance; dy++) {
-                                if (!isWalkable(pos.x + dx, pos.y + dy)) return 0
-                                if (new RoomPosition(pos.x + dx, pos.y + dy, pos.roomName).isNearToCached(position)) {
-                                    spots++
-                                }
-                            }
-                        }
-
-                        return spots
-                    })()
-                }))
-                .sort((a, b) => a.visibleTiles - b.visibleTiles || position.getRangeToCached(a.pos) - position.getRangeToCached(b.pos))
-                .shift()
-
-            return optimalPosition?.pos // Return the optimal position or undefined if none found
-        }
-
-        const filterPositions = (buildable_structures: StructurePosition[]): StructurePosition[] => {
-            // remove positions that are not clear
-            return buildable_structures
-                // remove duplicates with a higher level
-                .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure && t.level < v.level) === -1)
-                .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure) === i)
-
-                // remove structures that are blocked
-                .filter(({ x, y, structure }) => !this.structures.some(s => s.structureType === structure && s.pos.x === x && s.pos.y === y) || isWalkable(x, y))
-        }
+        const controllerPos = this.controller!.pos
 
         const setBuildPositions = (layout: string[], center: RoomPosition, level: number): StructurePosition[] => {
             if (!layout.length) return []
@@ -2285,197 +906,205 @@ class RoomHivemind {
             return buildable_structures
         }
 
-        const buildRoads = (startPos: { x: number, y: number }, endPos: { x: number, y: number }, range: number, buildableStructures: StructurePosition[]) => {
-            // find a path to the source
-            new RoomPosition(startPos.x, startPos.y, this.room.name)
-                .findPathTo(new RoomPosition(endPos.x, endPos.y, this.room.name), {
-                    range,
-                    ignoreCreeps: true,
-                    maxOps: 5000,
-                    maxRooms: 1,
-                    costCallback: (roomName, costMatrix) => {
+        const isWalkable = (x: number, y: number): boolean => {
+            // Check if coordinates are out of bounds
+            if (x < 0 || x > 49 || y < 0 || y > 49) return false
 
-                        for (const { x, y, structure } of buildableStructures) {
-                            if (costMatrix.get(x, y) === 255) continue // skip blocked positions
-                            else if (structure === STRUCTURE_ROAD) costMatrix.set(x, y, 1)
-                            else if (structure === STRUCTURE_ROAD) costMatrix.set(x, y, 200) // try to avoid
-                            else costMatrix.set(x, y, 255)
-                        }
+            if (this.constructionSites.some(cs => cs.pos.x === x && cs.pos.y === y)) return false
+            if (this.structures.some(cs => cs.pos.x === x && cs.pos.y === y)) return false
 
-                        const distance = 1
+            // Look at the specified position in the room
+            const lookResults = this.room.lookAt(x, y)
 
-                        for (const source of this.sources) {
-                            for (let dx = -distance; dx <= distance; dx++) {
-                                for (let dy = -distance; dy <= distance; dy++) {
-                                    if (!isWalkable(source.pos.x + dx, source.pos.y + dy) || costMatrix.get(source.pos.x + dx, source.pos.y + dy) === 255) continue // skip blocked positions
-                                    costMatrix.set(source.pos.x + dx, source.pos.y + dy, 100)
-                                }
+            // Determine if the position is walkable
+            return !lookResults.some(({ type, terrain, structure, constructionSite }) => {
+                // Check for impassable structures or terrain
+                if (type === "structure" && structure!.structureType === STRUCTURE_RAMPART) return true
+                if (type === "constructionSite" && constructionSite!.structureType !== 'road') return true
+                if (type === "terrain" && terrain === "wall") return true
+                return false
+            })
+
+            return true
+        }
+
+        const findOptimalPlacement = (
+            start: RoomPosition,
+            targets: RoomPosition[],
+            range: number
+        ): RoomPosition | null => {
+            const candidates: RoomPosition[] = []
+
+            // Generate all positions around the start within the given range
+            for (let dx = -range; dx <= range; dx++) {
+                for (let dy = -range; dy <= range; dy++) {
+                    if (dx === 0 && dy === 0) continue // Skip the original position
+                    // is walkable?
+                    if (!isWalkable(start.x + dx, start.y + dy)) continue
+
+                    const pos = new RoomPosition(start.x + dx, start.y + dy, start.roomName)
+                    candidates.push(pos)
+                }
+            }
+
+            let bestPosition: RoomPosition | null = null
+            let bestTotalCost = Infinity
+
+            for (const pos of candidates) {
+                let totalPathCost = 0
+                let valid = true
+
+                for (const target of targets) {
+                    const path = PathFinder.search(pos, { pos: target, range: 1 })
+
+                    if (path.incomplete) {
+                        valid = false
+                        break // Skip this candidate if it can't reach a target
+                    }
+
+                    totalPathCost += path.cost
+                }
+
+                if (valid && totalPathCost < bestTotalCost) {
+                    bestTotalCost = totalPathCost
+                    bestPosition = pos
+                }
+            }
+
+            return bestPosition
+        }
+
+        const filterPositions = (buildable_structures: StructurePosition[]): StructurePosition[] =>
+            // remove positions that are not clear
+            buildable_structures
+                // remove duplicates with a higher level
+                .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure && t.level < v.level) === -1)
+                .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure) === i)
+
+                // remove structures that are blocked
+                .filter(({ x, y, structure }) => isWalkable(x, y))
+
+        const planRoads = (
+            start: RoomPosition,
+            targets: RoomPosition[],
+            plannedStructures: StructurePosition[]
+        ): RoomPosition[] => {
+            const roadPositions: Set<string> = new Set()
+            const structureMap = new Map<string, StructurePosition>()
+
+            // Convert planned structures to a Map for quick lookups
+            for (const structure of plannedStructures) {
+                structureMap.set(`${structure.x},${structure.y},${start.roomName}`, structure)
+            }
+
+            for (const target of targets) {
+                const path = PathFinder.search(start, { pos: target, range: target.isEqualTo(controllerPos) ? 3 : 1 }, {
+                    plainCost: 5,
+                    swampCost: 5,
+                    roomCallback: (roomName) => {
+                        const room = Game.rooms[roomName]
+                        if (!room) return false
+
+                        const costs = new PathFinder.CostMatrix()
+
+                        // Consider existing structures
+                        this.structures.forEach(struct => {
+                            if (struct.structureType === STRUCTURE_ROAD) {
+                                costs.set(struct.pos.x, struct.pos.y, 1) // Prefer roads
+                            } else if (struct.structureType !== STRUCTURE_CONTAINER && struct.structureType !== STRUCTURE_RAMPART) {
+                                costs.set(struct.pos.x, struct.pos.y, 255) // Avoid placing roads where structures exist
+                            }
+                        })
+
+                        // Consider planned structures
+                        for (const { x, y, structure } of plannedStructures) {
+                            if (structure === STRUCTURE_ROAD) {
+                                costs.set(x, y, 1) // Encourage roads
+                            } else if (structure !== STRUCTURE_CONTAINER && structure !== STRUCTURE_RAMPART) {
+                                costs.set(x, y, 255) // Avoid placing roads where structures exist
                             }
                         }
 
-                        return costMatrix
-                    },
+                        return costs
+                    }
                 })
 
-                .forEach(({ x, y }) => {
-                    buildableStructures.push({ x: x, y, structure: STRUCTURE_ROAD, level: this.config.build.auto_build_roads_level })
-                })
-        }
-
-        const findBuildables = (): StructurePosition[] => {
-
-            const buildOrders = this.config.build.build_orders
-            let buildableStructures: StructurePosition[] = []
-
-            for (const level in buildOrders) {
-                const buildPositions = setBuildPositions(buildOrders[level], this.spawn!.pos, parseFloat(level))
-                this.log('manageConstruction', `#00fff4[**Buildables:**] level: ${level} buildPositions: ${buildPositions.length}`)
-                buildableStructures.push(...buildPositions)
-            }
-
-            buildableStructures = filterPositions(buildableStructures)
-
-            this.log('manageConstruction', `#00fff4[**Buildables:**] buildables: ${buildableStructures.length}`)
-
-            if (this.config.build.auto_build_containers) {
-                if (!this.constructionSites.some(cs => cs.pos.getRangeToCached(this.controller!.pos) < 6) && !this.containers.some(cs => cs.pos.getRangeToCached(this.controller!.pos) < 6)) {
-                    const controllerContainerPosition = adjacentPositions(this.controller!.pos, 3)
-                        .map(pos => ({
-                            pos,
-                            distance: (() => {
-                                // find a path to the source
-                                return new RoomPosition(this.spawn!.pos.x, this.spawn!.pos.y, this.room.name)
-                                    .findPathTo(new RoomPosition(pos.x, pos.y, this.room.name), {
-                                        range: 4,
-                                        ignoreCreeps: true,
-                                        maxOps: 5000,
-                                        maxRooms: 1,
-                                        costCallback: (roomName, costMatrix) => {
-                                            this.structures
-                                                .filter(s => s.structureType === STRUCTURE_ROAD || s.structureType === STRUCTURE_CONTAINER)
-                                                .forEach(({ pos: { x, y } }) => {
-                                                    if (costMatrix.get(x, y) === 255) return // skip blocked positions
-                                                    costMatrix.set(x, y, 1)
-                                                })
-
-                                            for (const { x, y, structure } of buildableStructures) {
-                                                if (costMatrix.get(x, y) === 255) return // skip blocked positions
-                                                else if (structure === STRUCTURE_ROAD || structure === STRUCTURE_CONTAINER) costMatrix.set(x, y, 1)
-                                                else costMatrix.set(x, y, 255)
-                                            }
-
-                                            return costMatrix
-                                        },
-                                    }).length
-                            })()
-                        }))
-                        .sort((a, b) => a.distance - b.distance)
-                        .shift()
-
-                    if (controllerContainerPosition) {
-                        buildableStructures.push({
-                            x: controllerContainerPosition.pos.x,
-                            y: controllerContainerPosition.pos.y,
-                            structure: STRUCTURE_CONTAINER,
-                            level: 2,
-                        })
-
+                for (const step of path.path) {
+                    const key = `${step.x},${step.y},${step.roomName}`
+                    if (!structureMap.has(key)) {
+                        roadPositions.add(key)
                     }
                 }
             }
 
-            // add a container near each source
-            this.sources.forEach(source => {
-                if (this.config.build.auto_build_containers) {
-                    // look for existing containers
-                    const container: StructurePosition | undefined = [
-                        ...this.room
-                            .lookForAtArea(LOOK_STRUCTURES, source.pos.x - 1, source.pos.y - 1, source.pos.x + 1, source.pos.y + 1, true)
-                            .filter((structure) => structure.structure.structureType === STRUCTURE_CONTAINER)
-                            .map(c => ({
-                                x: c.x,
-                                y: c.y,
-                                structure: STRUCTURE_CONTAINER,
-                                level: 2,
-                            })),
-
-                        ...this.containersNearSources
-                            .map(c => ({
-                                x: c.pos.x,
-                                y: c.pos.y,
-                                structure: STRUCTURE_CONTAINER,
-                                level: 2,
-                            })),
-
-                        ...this.constructionSites
-                            .filter((constructionSite) => constructionSite.pos.isNearToCached(source.pos))
-                            .map(c => ({
-                                x: c.pos.x,
-                                y: c.pos.y,
-                                structure: STRUCTURE_CONTAINER,
-                                level: 2,
-                            }))
-                    ]
-                        .shift()
-
-                    if (!container) {
-                        const optimalPosition = findOptimalPosition(source.pos, 1)
-
-                        if (optimalPosition) {
-                            buildableStructures.push({
-                                x: optimalPosition.x,
-                                y: optimalPosition.y,
-                                structure: STRUCTURE_CONTAINER,
-                                level: 2,
-                            })
-                        }
-                    } else {
-                        // path to spawn
-                        buildRoads(source.pos, container, this.config.build.auto_build_roads_level, buildableStructures)
-                    }
-                }
-
-                if (this.config.build.auto_build_roads_level > 0) {
-                    buildRoads(source.pos, this.spawn!.pos, this.config.build.auto_build_roads_level, buildableStructures)
-
-                    // find path to controller from source
-                    buildRoads(source.pos, this.controller!.pos, this.config.build.auto_build_roads_level, buildableStructures)
-                }
+            return Array.from(roadPositions).map(pos => {
+                const [x, y, roomName] = pos.split(",")
+                return new RoomPosition(parseInt(x, 10), parseInt(y, 10), roomName)
             })
+        }
 
-            if (this.config.build.auto_build_roads_level > 0) {
-                this.sources.forEach(source => {
-                    const otherSources = this.sources.filter(s => s.id !== source.id)
-                    otherSources.forEach(otherSource => {
-                        // path to other source
-                        buildRoads(source.pos, otherSource.pos, this.config.build.auto_build_roads_level, buildableStructures)
-                    })
+
+        const buildOrders = this.config.build.build_orders
+        let buildableStructures: StructurePosition[] = []
+
+        for (const level in buildOrders) {
+            const buildPositions = setBuildPositions(buildOrders[level], this.spawn!.pos, parseFloat(level))
+            if (this.config.debug) this.log('manageConstruction', `#00fff4[**Buildables:**] level: ${level} buildPositions: ${buildPositions.length}`)
+            buildableStructures.push(...buildPositions)
+        }
+
+        buildableStructures = filterPositions(buildableStructures)
+
+        // add a container near each source
+        const containerPositions: RoomPosition[] = [...this.sources.map(s => s.pos), controllerPos]
+        const targetPositions: RoomPosition[] = [...this.spawns.map(s => s.pos), ...this.sources.map(s => s.pos)]
+
+        containerPositions.forEach(position => {
+            const optimalPosition = findOptimalPlacement(position, [...targetPositions, controllerPos], position.isEqualTo(controllerPos) ? 3 : 1)
+
+            if (optimalPosition) {
+                if (this.containers.some(c => c.pos.getRangeTo(optimalPosition) <= 2)) return
+                if (this.constructionSites.some(cs => cs.pos.getRangeTo(optimalPosition) <= 2)) return
+
+                buildableStructures.push({
+                    x: optimalPosition.x,
+                    y: optimalPosition.y,
+                    structure: STRUCTURE_CONTAINER,
+                    level: this.config.build!.auto_build_containers,
                 })
-
-                // find a path to controller
-                buildRoads(this.spawn!.pos, this.controller!.pos, this.config.build.auto_build_roads_level, buildableStructures)
             }
+        })
 
-            buildableStructures = filterPositions(buildableStructures)
+        buildableStructures = filterPositions(buildableStructures)
 
-            return buildableStructures
+        const containerNearController = buildableStructures.find(b => b.structure === STRUCTURE_CONTAINER && new RoomPosition(b.x, b.y, this.room.name).getRangeTo(controllerPos) <= 3)
+        if (containerNearController) {
+            targetPositions.push(new RoomPosition(containerNearController.x, containerNearController.y, this.room.name))
         }
 
-        this.log('manageConstruction', `#00fff4[**Buildables:**] buildables: ${this.room.memory.buildables.length}`)
+        // find a path from spawn to each target
+        const roadPositions = planRoads(this.spawn!.pos, targetPositions, buildableStructures)
+        roadPositions.forEach(position => {
+            buildableStructures.push({
+                x: position.x,
+                y: position.y,
+                structure: STRUCTURE_ROAD,
+                level: this.config.build!.auto_build_roads_level,
+            })
+        })
 
-        // save to room memory
-        if (!this.room.memory.buildables || Game.time % this.config.build.build_frequency === 0) {
-            this.log('manageConstruction', `  - findBuildables`)
+        buildableStructures = filterPositions(buildableStructures)
+            .sort((a, b) => a.level - b.level) // sort by level, top is done first
 
-            this.room.memory.buildables = findBuildables()
-                .sort((a, b) => a.level - b.level) // sort by level, top is done first
-        }
+        if (this.config.debug) this.log('manageConstruction', `#00fff4[**Buildables:**] buildables: ${this.room.memory.buildables.length}`)
+
+        this.room.memory.buildables = buildableStructures
 
         this.manageConstruction()     // create buildables
     }
 
     private manageConstruction() {
-        if (this.constructionSites.length > this.config.build.max_constructions) return
+        if (!this.config.build || this.constructionSites.length > this.config.build.max_constructions) return
         if (this.room.memory.buildables.length === 0) return
 
         const spawn = this.spawns[0]
@@ -2483,44 +1112,44 @@ class RoomHivemind {
 
         let totalConstructions = this.constructionSites.length
 
-        this.startLogs('manageConstruction')
-        this.log('manageConstruction', `#00fff4[**manageConstruction:**] totalConstructions: ${totalConstructions} buildables: ${this.room.memory.buildables.length}`)
+        if (this.config.debug) this.startLogs('manageConstruction')
+        if (this.config.debug) this.log('manageConstruction', `#00fff4[**manageConstruction:**] totalConstructions: ${totalConstructions} buildables: ${this.room.memory.buildables.length}`)
 
         let i = 0
 
         while (this.room.memory.buildables.length > 0) {
             i++
             if (i > 10) {
-                this.log('manageConstruction', `  - **manageConstruction:** too many iterations`)
+                if (this.config.debug) this.log('manageConstruction', `  - **manageConstruction:** too many iterations`)
                 break
             }
 
             const buildable = this.room.memory.buildables[0]
             if (buildable.level > this.controllerLevel) break
 
-            this.log('manageConstruction', `  - **manageConstruction:** buildable: ${buildable.structure} ${buildable.x},${buildable.y}`)
+            if (this.config.debug) this.log('manageConstruction', `  - **manageConstruction:** buildable: ${buildable.structure} ${buildable.x},${buildable.y}`)
 
             const result = this.room.createConstructionSite(buildable.x, buildable.y, buildable.structure as BuildableStructureConstant)
 
             if (result === ERR_FULL || result === ERR_RCL_NOT_ENOUGH) { // too many construction sites -OR- Room Controller Level insufficient
-                this.log('manageConstruction', `  - **Not enough resources to build:** ${buildable.structure}`)
+                if (this.config.debug) this.log('manageConstruction', `  - **Not enough resources to build:** ${buildable.structure}`)
                 this.room.memory.buildables.shift()
             }
             else if (result === OK) {
                 totalConstructions++
-                this.log('manageConstruction', `  - **Built:** ${buildable.structure}`)
+                if (this.config.debug) this.log('manageConstruction', `  - **Built:** ${buildable.structure}`)
                 this.room.memory.buildables.shift()
             }
             else if (result === ERR_NOT_ENOUGH_RESOURCES) {
-                this.log('manageConstruction', `  - **Not enough resources to build:** ${buildable.structure}`)
+                if (this.config.debug) this.log('manageConstruction', `  - **Not enough resources to build:** ${buildable.structure}`)
                 this.room.memory.buildables.shift()
             }
             else if (result === ERR_INVALID_TARGET) {
-                this.log('manageConstruction', `  - **Invalid target:** ${buildable.structure}`)
+                if (this.config.debug) this.log('manageConstruction', `  - **Invalid target:** ${buildable.structure}`)
                 this.room.memory.buildables.shift()
             }
             else {
-                this.log('manageConstruction', `  - **Unknown error:** ${result}`)
+                if (this.config.debug) this.log('manageConstruction', `  - **Unknown error:** ${result}`)
                 this.room.memory.buildables.shift()
             }
 
@@ -2578,24 +1207,54 @@ class RoomHivemind {
             })
         }
 
-        if (this.config.build.show_build) {
+        if (this.config.build?.show_build) {
             this.room.memory.buildables ??= []
 
             for (const structure of this.room.memory.buildables) {
                 if (structure.structure === STRUCTURE_CONTAINER) {
-                    this.room.visual.circle(structure.x, structure.y, {
+                    this.room.visual.rect(structure.x - 0.3, structure.y - 0.3, 0.6, 0.6, {
                         fill: 'yellow',
-                        radius: 0.30,
+                        opacity: 0.35,
                         stroke: 'black',
                         strokeWidth: 0.05,
                     })
+
+                } else if (structure.structure === STRUCTURE_ROAD) {
+                    this.room.visual.circle(structure.x, structure.y, {
+                        fill: 'white',
+                        radius: 0.20,
+                        opacity: 0.35,
+                    })
+
+                } else if (structure.structure === STRUCTURE_EXTENSION) {
+                    this.room.visual.circle(structure.x, structure.y, {
+                        fill: 'yellow',
+                        radius: 0.30,
+                        opacity: 0.20,
+                        stroke: 'black',
+                        strokeWidth: 0.05,
+                    })
+
+                } else {
+                    this.room.visual.rect(structure.x - 0.3, structure.y - 0.3, 0.6, 0.6, {
+                        fill: 'white',
+                        opacity: 0.35,
+                    })
                 }
 
-                this.room.visual.text(structure.structure[0], structure.x, structure.y + 0.125, {
-                    font: 0.5,
-                    color: 'white',
-                    opacity: 0.35,
-                })
+                if (this.config.build.show_build_levels) {
+                    this.room.visual.text(structure.level.toString(), structure.x, structure.y + 0.15, {
+                        font: 0.35,
+                        color: 'yellow',
+                        opacity: 0.35,
+                    })
+                } else {
+                    this.room.visual.text(structure.structure[0], structure.x, structure.y + 0.125, {
+                        font: 0.5,
+                        color: 'white',
+                        opacity: 0.35,
+                    })
+                }
             }
         }
     }
@@ -2616,12 +1275,33 @@ class RoomHivemind {
         }
 
         // Example condition: Decrease threshold if there are enemies
-        if (this.enemies.length > 0) {
-            this.room.repairThreshold = Math.max(0.1, this.room.repairThreshold - adjustment)
+        if (this.threatLevel > 0) {
+            this.room.repairThreshold = Math.max(0.2, this.room.repairThreshold - (adjustment * 2))
         }
 
         // Ensure threshold is within reasonable bounds
-        this.room.repairThreshold = Math.min(0.9, Math.max(0.1, this.room.repairThreshold))
+        this.room.repairThreshold = Math.min(0.9, Math.max(0.2, this.room.repairThreshold))
+    }
+
+    public isNearSource(target: TargetTypes): boolean {
+        if (target instanceof StructureLink) return this.linksNearSources.some(l => l.id === target.id)
+        if (target instanceof StructureContainer) return this.containersNearSources.some(c => c.id === target.id)
+        if (this.sources.some(s => target.pos.getRangeToCached(s.pos) <= 6)) return true
+        return false
+    }
+
+    public isNearSpawn(target: TargetTypes): boolean {
+        if (target instanceof StructureLink) return this.linksNearSpawns.some(l => l.id === target.id)
+        if (target instanceof StructureContainer) return this.containersNearSpawns.some(c => c.id === target.id)
+        if (this.spawns.some(s => target.pos.getRangeToCached(s.pos) <= 6)) return true
+        return false
+    }
+
+    public isNearController(target: TargetTypes): boolean {
+        if (target instanceof StructureLink) return this.linksNearController.some(l => l.id === target.id)
+        if (target instanceof StructureContainer) return this.containersNearController.some(c => c.id === target.id)
+        if (this.controller && target.pos.getRangeToCached(this.controller.pos) <= 6) return true
+        return false
     }
 
     // debug logs
@@ -2630,17 +1310,17 @@ class RoomHivemind {
         manageTowers: [],
         manageCreeps: [],
         manageConstruction: [],
-        manageRefillables: [],
         manageRoles: [],
+        manageLinks: [],
     }
 
-    private startLogs(key: DebugConfig) {
-        if (!this.config.debug.enabled) return
+    public startLogs(key: DebugConfig) {
+        if (!this.config.debug) return
         this.logs[key] = []
     }
 
-    private log(key: DebugConfig, ...args: any[]) {
-        if (!this.config.debug.enabled) return
+    public log(key: DebugConfig, ...args: any[]) {
+        if (!this.config.debug) return
 
         this.logs[key].push({
             cpu: Game.cpu.getUsed(),
@@ -2648,11 +1328,11 @@ class RoomHivemind {
         })
     }
 
-    private flushLogs() {
-        if (!this.config.debug.enabled) return
+    public flushLogs() {
+        if (!this.config.debug) return
 
         Object.keys(this.logs).forEach(key => {
-            if (this.config.debug.keys && !this.config.debug.keys.includes(key as DebugConfig)) return
+            if (this.config.debug && !this.config.debug.includes(key as DebugConfig)) return
             if (this.logs[key as DebugConfig].length === 0) return
 
             let output = '<div style="padding: 1rem 2rem;background-color: #1f1f1f;border-radius: 1rem;margin: 0.25rem 0;min-width: 1024px;width:100%;max-width:1024px;overflow:auto;letter-spacing:-0.04em;line-height:1.2;">'
