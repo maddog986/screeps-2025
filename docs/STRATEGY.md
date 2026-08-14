@@ -17,13 +17,32 @@ Official rules worth internalizing: [Screeps docs](https://docs.screeps.com/), e
 
 ## Intended life cycle
 
+`src/colony_phase.ts` picks a phase from the room snapshot (RCL, extensions, containers, tower, storage, threat). Spawn quotas, bodies, remotes, and task weights all come from that policy.
+
 ```
-RCL 1  Place spawn
-       2–4 small harvesters mine + upgrade + build first containers
+bootstrap  RCL 1, no extensions
+           3–5 cheap WCM generalists. No mule/builder/upgrader roles.
+           Score upgrade and spawn-fill above building (unless the site is a spawn).
+
+grow       RCL 2+ or any extension exists
+           Cheap mule after a source container + 2 harvesters.
+           1 upgrader. 1 builder if sites exist.
+           5W miners only at 550 capacity, 5 extensions, source container, and a mule.
+
+operate    RCL 3 + tower + 5 extensions + source container
+           Static miners, mules, scouts. Remotes if RCL 4 and safe.
+
+expand     RCL 4+, 1300 capacity, storage or source containers, threat 0
+           Claimer if GCL and a scored target exist. Extra harvester for remotes.
+```
+
+```
+RCL 1  Place spawn — bootstrap generalists mine, fill spawn, upgrade to RCL 2
 RCL 2  Extensions, dedicated upgrader, first mule once a source container exists
 RCL 3  Tower, more extensions, scout starts mapping exits
-RCL 4  Storage (hub), roads, claimer if GCL allows and a neighbor looks safe
-RCL 5  Links: source → storage/controller. Fewer mule trips.
+RCL 4  Storage (hub), roads, remotes, claimer if GCL allows and a neighbor looks safe
+RCL 5  Links: source → spawn. Fewer mule trips.
+RCL 6  Terminal, more extensions, controller link
 ```
 
 Energy path we already encode:
@@ -75,15 +94,10 @@ A new session is fine once this primer is on `hivemind`. This session already ha
 
 ## Next slices (backlog)
 
-Use this as the default roadmap. Cross off from the top unless sim evidence says otherwise.
-
-1. **Unstick bootstrap** — first 200 ticks from a lone spawn: sites appear, harvesters upgrade, first container completes.
-2. **Static miners** — after a source container, spawn a 5-WORK miner (roads permitting) instead of many fat generalists.
-3. **Storage hub** — RCL 4 stencil + mule logic that fills storage, then spawn, then controller.
-4. **Smarter claims** — score 2-source neighbors; do not walk into threat 2+.
-5. **Remote harvest** — haul from a reserved neighbor before a second claim.
-6. **Tower + walls** — repair threshold already exists; add ramparts around spawn once a tower is up.
-7. **CPU pass** — persist bunker plan, cache paths, drop unused visuals.
+1. **Reserve remotes** — claimer/reserver on a neighbor source room when GCL is tight.
+2. **Link balancing** — source → spawn is placed at RCL 5; tune `manageLinks` if energy sits in the wrong link.
+3. **Tower + walls** — ramparts already cover spawn/towers at RCL 3; extend when threat rises.
+4. **CPU pass** — persist bunker plan, cache paths, drop unused visuals.
 
 ## What not to do
 

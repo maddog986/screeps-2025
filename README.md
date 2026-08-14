@@ -29,9 +29,13 @@ Room and creep managers are attached as prototypes (`room.manager`, `creep.manag
 
 Any **owned** room (plus `sim` and names listed in `CONFIG.rooms`) gets the full structure scan and build planner. You do not have to pre-register a room for a placed spawn to start working. `CONFIG.rooms` is for per-room overrides (`spawnPos`, bunker, debug) and optional expansion hints.
 
+### Colony phases
+
+`src/colony_phase.ts` classifies each owned room as `bootstrap`, `grow`, `operate`, or `expand` from RCL, extensions, containers, tower, storage, and threat. That policy sets spawn quotas, bodies, whether remotes are legal, and the task-score weights `CreepManager` multiplies in. The room visual shows `Phase:…`.
+
 ### Spawn quotas
 
-Bodies scale with `energyCapacityAvailable`. Quotas react to what the room already has — that is the "grows on its own" part. Spawn order is harvester → mule → builder → upgrader → defender → scout → claimer.
+Bodies and counts come from the current phase, not a single RCL table. Spawn order is harvester → mule → builder → upgrader → defender → scout → claimer.
 
 | Role | When it spawns | Job |
 | --- | --- | --- |
@@ -76,8 +80,9 @@ Every `build_frequency` ticks the planner:
 
 1. Stamps the stencil around the spawn, filtered to tiles that are still empty.
 2. Places a container next to each source and the controller (`auto_build_containers`, default RCL 1).
-3. Paths roads from spawn to sources/controller (`auto_build_roads_level`, default RCL 4).
-4. Creates up to `max_constructions` sites, in level order, only if the controller is high enough.
+3. At RCL 5+, places a spawn link and a source link (`auto_build_links_level`). A controller link waits for RCL 6.
+4. Paths roads from spawn to sources/controller (`auto_build_roads_level`, default RCL 4).
+5. Creates up to `max_constructions` sites, in level order. If a structure is already at the RCL cap, that site is skipped so later items can still place.
 
 `spawnPos` is used when a claimer first takes a room so the first spawn site is dropped at a known coordinate.
 
@@ -138,6 +143,7 @@ CONFIG.rooms.W8N3                // optional per-room debug + bunker + spawnPos
 ```
 src/main.ts            Tick loop
 src/config.ts          Visuals, room list, bunker stencils
+src/colony_phase.ts    Phase policy: quotas, bodies, remotes, task weights
 src/room_hivemind.ts   Room census, spawning, towers, links, builder
 src/creep_manager.ts   Task scoring and execution
 src/squads.ts          Combat squads
