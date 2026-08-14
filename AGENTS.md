@@ -26,7 +26,13 @@ Do not treat lint failure as something your change broke. Rely on `npx tsc --noE
 
 ### Deploying / uploading
 
-Uploading to Screeps requires credentials that are not present in this environment: either a `screeps.json` (gitignored, copy from `screeps.sample.json`) or a `SCREEPS_TOKEN` env var. Without one of these, `npm run push-*` throws "No upload credentials". `npm run build` (no DEST) works with no credentials and is what you use to verify a change compiles/bundles.
+`SCREEPS_TOKEN` is provided as an environment secret in Cursor Cloud, so uploads work directly:
+
+- `npm run push-sim` builds and uploads to the Screeps **`sim`** branch — the active simulator branch (`activeSim: true`). This is how you deploy a change for the player to watch in the in-game simulator. `rollup-plugin-screeps` uploads silently on success; it only prints the rollup build line, so verify with the Screeps API if needed (e.g. `curl -s -H "X-Token: $SCREEPS_TOKEN" "https://screeps.com/api/user/code?branch=sim"`).
+- `npm run push-main` / `push-season` / `push-pserver` target other destinations.
+- `npm run build` (no DEST) compiles/bundles without uploading and needs no credentials — use it to verify a change compiles.
+
+If `SCREEPS_TOKEN` is ever missing, the fallback is a gitignored `screeps.json` (copy from `screeps.sample.json`); without either, `npm run push-*` throws "No upload credentials". The token grants API/upload access only — it does not log you into the Screeps web client, so the simulator UI itself can't be driven from here.
 
 ### Running / smoke-testing the bot without a Screeps server
 
