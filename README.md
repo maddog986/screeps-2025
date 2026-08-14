@@ -4,6 +4,8 @@ A TypeScript Screeps AI. The intended loop is: **place one spawn, then watch the
 
 This repo started from [screeps-typescript-starter](https://github.com/screepers/screeps-typescript-starter). The `hivemind` branch is the latest working design.
 
+Strategy for humans and Cloud Agents lives in [`docs/STRATEGY.md`](docs/STRATEGY.md). Cursor loads [`.cursor/rules/screeps.mdc`](.cursor/rules/screeps.mdc) on every session.
+
 ## How a tick runs
 
 `src/main.ts` is the only Screeps entry point:
@@ -189,6 +191,23 @@ After that, each push to `hivemind` or a `cursor/**` branch overwrites `sim`. Us
 `SCREEPS_TOKEN` lives on the **Screeps** GitHub Environment (`Settings → Environments → Screeps`). The deploy job sets `environment: Screeps` so that secret is injected. A repository-level secret with the same name also works.
 
 The token is read from the environment (`SCREEPS_TOKEN`). It is never committed. `screeps.json` stays local-only.
+
+## Brief a Cloud Agent
+
+New sessions do not remember this chat. They do read `.cursor/rules/screeps.mdc` and anything you paste.
+
+A kickoff that is enough to set one free:
+
+```
+Read README.md, docs/STRATEGY.md, and .cursor/rules/screeps.mdc.
+Evolve the next slice on the strategy backlog. Open a PR.
+tsc and npm run build must pass. Pushes deploy to the Screeps sim branch.
+
+What I saw in the simulator:
+- (idle creeps / empty spawn / no construction / etc.)
+```
+
+This session already has the repo in context. You can also just say "go" here.
 
 ## Manual overrides
 

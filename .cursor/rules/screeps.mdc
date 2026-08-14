@@ -1,208 +1,57 @@
 ---
-description: Screeps developement using Typescript
-globs: 
----
-# **Screeps Development Guidelines**
-
-## **Core Directives**
-1. **Performance & Efficiency**
-   - Code must be optimized for CPU/memory efficiency.
-   - Avoid unnecessary recalculations—use caching and lazy evaluation when possible.
-
-2. **Strict Type Safety**
-   - All TypeScript code must use `strict` mode.
-   - Explicit type narrowing is required—avoid `any` and `unknown` unless necessary.
-   - Use discriminated unions for handling related types.
-
-3. **Dynamic & Configurable Code**
-   - Prefer JSON-based configurations over hardcoded logic.
-   - Modularize behaviors to ensure flexibility for future expansions.
-
+description: Hivemind Screeps bot — architecture, strategy, and how to evolve it
+globs:
 ---
 
-### Core Features
+# Hivemind
 
-#### 1. **Code Optimization**
-- Analyze Screeps code snippets and suggest performance improvements, particularly CPU and memory optimization.
-- Provide practical advice for optimizing creep behavior, pathfinding, and overall gameplay efficiency.
+This is Maddog986's Screeps AI, not a starter kit. Goal: **place one spawn and watch the colony grow**, then expand outward without a scripted room list.
 
-#### 2. **Debugging Assistance**
-- Help identify and resolve gameplay issues, such as:
-  - Memory usage.
-  - Unexpected creep behavior.
-  - Room and resource management inconsistencies.
+Read `README.md` and `docs/STRATEGY.md` before changing behavior. Prefer evolving the existing task-scoring hivemind over rewriting it.
 
-#### 3. **Learning Modules**
-- Introduce and explain advanced Screeps mechanics (e.g., custom pathfinding, power creeps, shard management).
-- Break down common concepts such as `Room`, `Creep`, and `Game` for clarity.
+## Architecture (do not fight this)
 
-#### 4. **Example Generators**
-- Provide pre-built functions, classes, and structures to fulfill specific game objectives:
-  - Harvesters, upgraders, and room managers.
-  - Tailored solutions for problem-solving, built with best practices.
+- `src/main.ts` — tick loop only.
+- `src/room_hivemind.ts` — room census, spawn quotas, towers, links, bunker planner, expansion targets. Constructed on first `room.manager` access.
+- `src/creep_manager.ts` — score legal tasks, execute one work + one transfer per tick.
+- `src/squads.ts` — unfinished combat grouping. Do not build new combat on top of the hardcoded idle tile without fixing it.
+- `src/prototypes.ts` — `room.manager`, `creep.tasks`, cached ranges.
+- `src/config.ts` — visuals, `autonomy.explore` / `expand`, per-room bunker + `spawnPos`.
 
-#### 5. **Stretch Features**
-- **Custom Code Generation**: Create modular classes (e.g., `RoomManager`, `CreepManager`) tailored to my needs.
-- **Performance Profiling**: Analyze provided code for CPU usage and identify bottlenecks.
-- **Screeps Bot Framework**: Build a ready-to-use Screeps bot template using **TypeScript**.
+Creeps are **role-biased, not role-locked**. Missing specialists get impersonated (`actAsMule` / `actAsBuilder` / `actAsUpgrader`). Tasks live on `creep.memory.tasks`. The `transfers` map is a per-tick shadow store so two creeps do not plan the same 50 energy.
 
----
+`CONFIG.rooms` is overrides and expansion hints, not a whitelist. Any owned room must keep working.
 
-## **Coding Standards**
+## Tick budget
 
-### **General Rules**
-✅ **Use Function Declarations**: Prefer function declarations over `const fn = () => {}` unless used for inline callbacks.
+Screeps gives a small CPU budget every tick. Treat CPU as a resource.
 
-✅ **Explicit Type Checking**: Always narrow types explicitly using exhaustive conditionals or type guards.
+- Cache `Game.getObjectById` and ranges for the tick (already have `getRangeToCached`).
+- Do not enable `debug: ['manageCreeps']` by default.
+- Do not rebuild the bunker plan every tick. `build_frequency` exists for a reason.
+- Prefer `PathFinder.search` + reuse over raw `moveTo` spam when touching pathing.
+- Store `RoomObject.id` in Memory, never live objects.
 
-✅ **Minimalistic Error Handling**
-- Errors should be meaningful and gracefully handled.
-- Use exhaustive checks (`never` type) to prevent unhandled cases.
+## TypeScript
 
-✅ **Single Responsibility Principle**
-- Functions should serve one clear purpose.
-- Logic should be modular and reusable.
+`strict` is on. No `any` unless justified. Discriminated unions + exhaustive `never` checks for task/action switches. `npx tsc --noEmit` and `npm run build` must pass. Pushes to `cursor/**` or `hivemind` deploy to the Screeps **sim** branch via GitHub Actions.
 
-✅ **Avoid Redundant Memory Usage**
-- Reduce object references stored in `Memory`.
-- Use `RoomObject.id` instead of storing whole objects.
+## How to evolve (when set free)
 
-✅ **Efficient Pathfinding**
-- Use `PathFinder.search` with cost matrices where applicable.
-- Avoid `moveTo` spam; implement `moveByPath` where beneficial.
+Ship one vertical slice per PR. Watch the sim. Then the next slice.
 
-✅ **Consistent Logging**
-- Debugging logs should be toggleable.
-- Use a structured logging system for debugging.
+Priority order unless the user says otherwise:
 
----
+1. **Bootstrap** — a lone spawn must reach RCL 2 with containers without getting stuck (idle creeps, empty spawn, no sites).
+2. **Economy** — static miners once containers exist; mules keep spawn full; upgraders only spend surplus.
+3. **Bunker** — stencil through RCL 4–5 (storage, second tower, links). Storage becomes the energy hub.
+4. **Expansion scoring** — prefer 2-source, low-threat, nearby rooms over "first name in CONFIG".
+5. **Remotes** — harvest adjacent sources before a second claim if GCL is tight.
+6. **Defense** — towers first; defenders only when threat ≥ 2; fix squad idle.
+7. **CPU** — path cache, cheaper census, less debug HTML.
 
-## **Screeps-Specific Standards**
-🔹 **Performance Optimization**
-- Minimize calls to `Game.getObjectById` by caching results per tick.
-- Optimize room visibility—avoid `Game.rooms` iteration unless necessary.
-- Prioritize non-blocking actions to prevent CPU spikes.
+Do not add a second framework (external task lib, Traveler, etc.) unless the current one is the blocker. Do not hardcode shard room names as the only way a room functions.
 
-🔹 **Task Validation Framework**
-- Tasks should include a `validate` field to ensure targets remain valid.
+## Feedback from the player
 
-🔹 **Global Memory Structures**
-- `CreepMemory` and global interfaces are defined in `main.ts`—notify if changes are required.
-
-🔹 **No Hardcoded Role Logic**
-- Role definitions are handled externally—avoid adding them to shared code.
-
-🔹 **Caching System**
-- Utilize the existing caching system (supports TTL, debug logging, and game object resolution).
-
-🔹 **Modular Creep Behaviors**
-- Implement behaviors dynamically based on task assignments.
-- Support role-less task execution via a task manager.
-
-🔹 **Room & Resource Management**
-- Implement adaptive room management based on energy income.
-- Optimize source allocation for harvesters and haulers.
-
-🔹 **Combat & Defense**
-- Automate tower targeting logic based on threats.
-- Implement dynamic retreat and regrouping strategies.
-
-🔹 **Expansion & Colonization**
-- Use a priority queue to determine expansion targets.
-- Automate spawn requests based on room development status.
-
----
-
-## **Preferred Tools & Libraries**
-- **Pathfinding:** `PathFinder.search` with terrain cost matrices  
-- **Memory Management:** Efficient serialization & TTL-based caching  
-- **Logging:** Structured logging with debug levels  
-- **Task System:** Dynamic, validation-based assignments  
-- **Creep AI:** Modular, behavior-driven actions  
-
----
-
-### Explicit Instructions for All Requests
-
-#### 1. **Type Safety**
-- Always enable `strict` mode in `tsconfig.json`.
-- Use discriminated unions for related types (`type` field) and rely on TypeScript's type system for clarity.
-- Avoid using `any` or `unknown` unless absolutely necessary, and provide justification if used.
-
-#### 2. **Type Guard Validation**
-- Implement strict type guards for all union types.
-- Use exhaustive conditional logic (e.g., `if` or `switch`) to validate every possible type in the union.
-- Example:
-
-```typescript
-function handleTarget(target: TargetType): void {
-    if (target.type === 'position') {
-        // Handle position logic
-    } else if (target.type === 'object') {
-        // Handle object logic
-    } else if (target.type === 'none') {
-        // Handle none logic
-    } else {
-        const exhaustiveCheck: never = target;
-        throw new Error(`Unhandled target type: ${exhaustiveCheck}`);
-    }
-}
-```
-
-#### 3. Return Value Validation
-- Functions must strictly return values matching their specified return types.
-- All branches of union types must be explicitly handled, ensuring no undefined or unexpected values are returned.
-
-#### 4. Testing and Debugging
-- Test type guard logic against real-world scenarios.
-- Ensure all branches of conditional statements are covered by tests.
-- Use console debugging for verbose outputs when debugLevel is enabled.
-
-#### 5. Commenting and Documentation
-- Provide comments for all type guards, validations, and return types.
-- Clearly explain the purpose of conditions and logic for improved readability.
-
-#### 6. Verified Updates
-- Ensure all changes pass TypeScript checks using tsc before finalizing.
-- Validate all input and output types through testing and debugging.
-
-#### 7. Error Handling
-- Use meaningful error messages for invalid input or unhandled cases.
-- Implement exhaustive checks using the never type to identify unreachable code.
-- Example:
-```typescript
-function processInput(input: InputType): void {
-    switch (input.kind) {
-        case 'kindA':
-            // Handle kindA logic
-            break;
-        case 'kindB':
-            // Handle kindB logic
-            break;
-        default:
-            const exhaustiveCheck: never = input;
-            throw new Error(`Unhandled input kind: ${exhaustiveCheck}`);
-    }
-}
-```
-
-#### 8. Consistency in Logic
-- Use helper functions to centralize logic where possible, such as wrapTarget or shared type guards.
-- Write reusable patterns for common operations like validating or converting types.
-
----
-
-### Workflow for Projects
-- Define strict types and discriminated unions for the data structures.
-- Add full type guard validations for all possible cases.
-- Write tests for every validation, ensuring edge cases are covered.
-- Debug the code and document all validations and outputs thoroughly.
-- Confirm that all changes pass tsc checks without errors.
-- Gracefully handle errors and ensure exhaustive logic.
-
----
-
-## **Final Notes**
-- Do **not** summarize or cut large groups of code unless explicitly requested.
-- Always analyze JSON structures before implementing solutions.
-- If any changes affect critical files (`main.ts`, caching system, `creep_manager.ts`, etc.), notify before proceeding.
+If they paste sim console, screenshots, or "H1 stands on the source and never upgrades", treat that as ground truth and fix that loop first. The scoring weights are unfinished; live behavior beats theory.
