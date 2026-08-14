@@ -1,0 +1,58 @@
+name: Deploy to Screeps sim
+
+# Push events receive repository secrets. pull_request often does not when the
+# PR is opened by an app (Cloud Agents), which is why the first run saw an empty token.
+on:
+  push:
+    branches:
+      - hivemind
+      - 'cursor/**'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Screeps code branch to overwrite
+        required: true
+        default: sim
+        type: choice
+        options:
+          - sim
+          - main
+
+concurrency:
+  group: screeps-sim-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: Screeps
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install
+
+      - name: Require SCREEPS_TOKEN
+        env:
+          SCREEPS_TOKEN: ${{ secrets.SCREEPS_TOKEN }}
+        run: |
+          if [ -z "$SCREEPS_TOKEN" ]; then
+            echo "::error::SCREEPS_TOKEN is empty on the Screeps environment."
+            echo "Add it at https://github.com/${GITHUB_REPOSITORY}/settings/environments/Screeps"
+            echo "or as a repository secret at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions"
+            echo "Create a full-access token at https://screeps.com/a/#!/account/auth-tokens"
+            exit 1
+          fi
+
+      - name: Build and upload
+        env:
+          SCREEPS_TOKEN: ${{ secrets.SCREEPS_TOKEN }}
+          SCREEPS_BRANCH: ${{ github.event.inputs.branch || 'sim' }}
+        run: npm run push-sim

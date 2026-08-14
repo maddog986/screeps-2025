@@ -144,7 +144,7 @@ src/prototypes.ts      room.manager, creep.tasks, cached ranges
 
 ## Setup
 
-Needs Node 18 (see `.nvmrc`).
+Needs Node 18+ (see `.nvmrc`).
 
 ```bash
 npm install
@@ -160,11 +160,35 @@ npm run push-sim       # upload to the sim branch
 npm run watch-main     # rebuild + upload on change
 ```
 
+You can skip `screeps.json` and pass a token instead:
+
+```bash
+SCREEPS_TOKEN=... npm run push-sim
+```
+
 Destinations in `screeps.sample.json`: `main`, `sim`, `season`, `pserver`. Private servers need [screepsmod-auth](https://github.com/ScreepsMods/screepsmod-auth).
 
 ```bash
 npm run lint
 ```
+
+## CI: push to the Screeps simulator
+
+`.github/workflows/deploy-sim.yml` builds the bundle and uploads it to the Screeps **`sim`** branch on every push to `hivemind` or `cursor/**` (Cloud Agent branches). That is the branch the in-game simulator runs. It uses `push` rather than `pull_request` so the `SCREEPS_TOKEN` repository secret is available.
+
+One-time setup:
+
+1. In the Screeps client, open **Script** and create a branch named `sim` if it does not exist. The API will not create it for you.
+2. Create a **full access** auth token at [screeps.com/a/#!/account/auth-tokens](https://screeps.com/a/#!/account/auth-tokens).
+3. Add it as `SCREEPS_TOKEN` on the GitHub **Screeps** environment
+   (`Settings → Environments → Screeps`), which is what this workflow reads.
+4. In the simulator, set the active branch to **sim**.
+
+After that, each push to `hivemind` or a `cursor/**` branch overwrites `sim`. Use **Actions → Deploy to Screeps sim → Run workflow** to push `sim` or `main` by hand.
+
+`SCREEPS_TOKEN` lives on the **Screeps** GitHub Environment (`Settings → Environments → Screeps`). The deploy job sets `environment: Screeps` so that secret is injected. A repository-level secret with the same name also works.
+
+The token is read from the environment (`SCREEPS_TOKEN`). It is never committed. `screeps.json` stays local-only.
 
 ## Manual overrides
 
