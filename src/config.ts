@@ -33,6 +33,12 @@ declare global {
             show_assignments: boolean
         }
 
+        // Place one spawn and let the room grow. These flags turn outward growth on/off.
+        autonomy: {
+            explore: boolean
+            expand: boolean
+        }
+
         rooms: {
             [key: string]: RoomConfig
         }
@@ -79,6 +85,8 @@ const bunker1 = {                // build orders
     ]
 }
 
+// Per-room entries below (W8N3 / W7N3 / W7N4) are the original shard rooms.
+// Replace them with your rooms and spawnPos before deploying. `default` covers sim and anything else.
 export const CONFIG: Config = {
     visuals: {                                 // visuals
         enabled: true,                         // enable/disable visuals
@@ -88,9 +96,14 @@ export const CONFIG: Config = {
         creep_travel: false,                   // show creep paths
     },
 
+    autonomy: {
+        explore: true,                         // spawn a scout once the home room is stable
+        expand: true,                          // spawn a claimer when GCL allows another room
+    },
+
     rooms: {
         default: {                             // room name
-            debug: ['manageCreeps'], //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction']
+            // debug: ['manageCreeps'], //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction']
             build: {                           // building
                 show_build: false,             // show build orders
                 show_build_levels: false,      // show build levels
@@ -103,7 +116,7 @@ export const CONFIG: Config = {
             }
         },
         W8N3: {                             // room name
-            debug: ['manageCreeps'], //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction']
+            // debug: ['manageCreeps'], //['manageRoles','manageSpawns', 'manageTowers', 'manageCreeps', 'manageConstruction']
             build: {                           // building
                 show_build: false,             // show build orders
                 show_build_levels: false,      // show build levels
