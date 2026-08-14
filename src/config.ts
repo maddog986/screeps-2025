@@ -8,6 +8,7 @@ declare global {
             max_constructions: number
             auto_build_roads_level: number
             auto_build_containers: number
+            auto_build_links_level: number
             spawnPos: { x: number, y: number }
             build_orders: {
                 [key: number]: string[]
@@ -77,11 +78,22 @@ const bunker1 = {                // build orders
         ' .EE.EE. ',
         '.EEE.ETE.',
         '.EE .CEE.',
-        ' ...A... ',
+        ' ...AK.. ',
         '.EEC. EE.',
         '.ETE.EEE.',
         ' .EE.EE. ',
         '  .. ..  ',
+    ],
+    6: [
+        ' EE.. ..EE ',
+        ' E.EE.EE.E ',
+        '.EEEE.ETEE.',
+        '.EEE .CEEE.',
+        '.EE.KAM.EE.',
+        '.EEE. EEEE.',
+        '.ETEE.EEEE.',
+        ' E.EE.EE.E ',
+        ' EE.. ..EE ',
     ]
 }
 
@@ -111,6 +123,7 @@ export const CONFIG: Config = {
                 max_constructions: 3,          // max number of construction sites to place
                 auto_build_roads_level: 4,     // build roads at this level
                 auto_build_containers: 1,      // build containers at this level
+                auto_build_links_level: 5,     // source + spawn links at this level
                 spawnPos: { x: 25, y: 25 },
                 build_orders: bunker1
             }
@@ -124,6 +137,7 @@ export const CONFIG: Config = {
                 max_constructions: 3,          // max number of construction sites to place
                 auto_build_roads_level: 4,     // build roads at this level
                 auto_build_containers: 1,      // build containers at this level
+                auto_build_links_level: 5,
                 spawnPos: { x: 18, y: 16 },
                 build_orders: bunker1
             }
@@ -137,6 +151,7 @@ export const CONFIG: Config = {
                 max_constructions: 3,          // max number of construction sites to place
                 auto_build_roads_level: 4,     // build roads at this level
                 auto_build_containers: 1,      // build containers at this level
+                auto_build_links_level: 5,
                 spawnPos: { x: 33, y: 10 },
                 build_orders: bunker1
             }
@@ -150,6 +165,7 @@ export const CONFIG: Config = {
                 max_constructions: 3,          // max number of construction sites to place
                 auto_build_roads_level: 4,     // build roads at this level
                 auto_build_containers: 1,      // build containers at this level
+                auto_build_links_level: 5,
                 spawnPos: { x: 35, y: 28 },
                 build_orders: bunker1
             }
