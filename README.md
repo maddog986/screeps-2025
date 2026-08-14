@@ -35,8 +35,8 @@ Bodies scale with `energyCapacityAvailable`. Quotas react to what the room alrea
 
 | Role | When it spawns | Job |
 | --- | --- | --- |
-| `harvester` | 2–4 generalists before source containers; then 1 per source | Mine sources. Dump into nearby containers/links. Will upgrade/build/haul if those specialists do not exist yet. |
-| `mule` | +1 per source container, +1 if a spawn container exists, +1 controller container at RCL 3+ | Move energy: source containers → spawn/extensions/towers → controller container. |
+| `harvester` | 2–4 generalists before source containers; then 1 static miner per source (5 WORK at 550 energy) | Mine sources. Dump into nearby containers/links. Will upgrade/build/haul if those specialists do not exist yet. |
+| `mule` | +1 per source container, +1 spawn container, +1 controller container at RCL 3+, +1 if storage exists | Move energy: source containers → spawn/extensions/towers → storage (RCL 4) → controller container. |
 | `builder` | Any construction sites (2 if there are 3+ sites and containers) | Build the bunker and roads. |
 | `upgrader` | RCL 2+ (2 at RCL 4 with a controller container) | Sit on the controller and pull from the nearby container/link. |
 | `defender` | Threat level ≥ 2 | Attack hostiles in this room, or travel to a threatened help room. |
@@ -218,6 +218,6 @@ This session already has the repo in context. You can also just say "go" here.
 ## Known gaps
 
 - Squad idle movement uses a hardcoded coordinate.
-- Bunker stencil is filled through RCL 5. Storage, terminal, and later structures are in the letter map but not in the current layout.
-- Expansion picks the nearest safe scouted neighbor; it does not yet score mineral type, source count, or remote distance beyond one hop.
+- Bunker stencil includes storage at RCL 4. Terminal and later structures are in the letter map but not in the current layout.
+- Expansion scores source count, threat, and distance. Mineral type is not scored yet.
 - Scoring weights still need live tuning. The design is emergent (highest-score task wins), not a scripted RCL checklist.

@@ -145,6 +145,7 @@ class RoomHivemind {
     transfers: Record<string, number> = {}
     flags: Flag[] = []
     spawn: StructureSpawn | undefined
+    storage: StructureStorage | undefined
     hostileStructures: StructureTower[] = []
     threatLevel: number = 0
     links: StructureLink[] = []
@@ -221,6 +222,9 @@ class RoomHivemind {
                 if (structure.structureType === STRUCTURE_LINK && structure.my === true) {
                     this.links.push(structure)
                 }
+                if (structure.structureType === STRUCTURE_STORAGE && structure.my === true) {
+                    this.storage = structure
+                }
                 if ('my' in structure && structure.my === true) {
                     this.myStructures.push(structure)
                 }
@@ -285,9 +289,16 @@ class RoomHivemind {
         const expansionTarget = this.getExpansionTargets()[0]
 
         // No source containers yet: several small generalists harvest / upgrade / build.
-        // After containers: one dedicated miner per source; bodies scale with RCL.
+        // After containers: one static miner per source (5 WORK once the room can afford 550).
         this.creepsSetup.harvester = {
-            body: this.buildCreepBody(900, { move: 3, work: 1, carry: 2 }, HARVEST_POWER, 12),
+            body: hasSourceContainers
+                ? this.buildCreepBody(
+                    this.energyCapacityAvailable >= 550 ? 550 : 300,
+                    this.energyCapacityAvailable >= 550 ? { move: 1, work: 5, carry: 1 } : { move: 1, work: 2, carry: 1 },
+                    HARVEST_POWER,
+                    10
+                )
+                : this.buildCreepBody(900, { move: 3, work: 1, carry: 2 }, HARVEST_POWER, 12),
             max: hasSourceContainers
                 ? sourceCount
                 : Math.max(2, Math.min(this.sourceWalkablePositionsTotal || 3, 4))
@@ -298,6 +309,7 @@ class RoomHivemind {
             max: this.containersNearSources.length
                 + (this.containersNearSpawns.length > 0 ? 1 : 0)
                 + (this.containersNearController.length > 0 && this.controllerLevel >= 3 ? 1 : 0)
+                + (this.storage ? 1 : 0)
         }
 
         this.creepsSetup.builder = {
@@ -417,8 +429,24 @@ class RoomHivemind {
             })
             .map(([name]) => name)
 
-        return [...fromConfig, ...fromMemory.filter(name => !fromConfig.includes(name))]
-            .sort((a, b) => Game.map.getRoomLinearDistance(this.room.name, a) - Game.map.getRoomLinearDistance(this.room.name, b))
+        const unique = [...fromConfig, ...fromMemory.filter(name => !fromConfig.includes(name))]
+            .filter(name => ((Memory.rooms ?? {})[name]?.threatLevel ?? 0) < 2)
+
+        return unique.sort((a, b) => this.scoreExpansionRoom(b) - this.scoreExpansionRoom(a))
+    }
+
+    private scoreExpansionRoom(name: string): number {
+        const memory = Memory.rooms[name]
+        const sources = memory?.sources?.length ?? (name in CONFIG.rooms ? 1 : 0)
+        const threat = memory?.threatLevel ?? 0
+        const distance = Game.map.getRoomLinearDistance(this.room.name, name)
+
+        let score = sources * 10
+        if (sources >= 2) score += 15
+        score -= threat * 25
+        score -= distance * 4
+        if (name in CONFIG.rooms && name !== 'default') score += 3
+        return score
     }
 
     public getAdjacentRooms(): string[] {
@@ -864,8 +892,13 @@ class RoomHivemind {
 
     private manageBuilding() {
         if (!this.config.build) return
-        if (this.room.memory.buildables && Game.time % this.config.build.build_frequency !== 0) return
         if (!this.spawn) return
+
+        const hasPlan = (this.room.memory.buildables?.length ?? 0) > 0
+        if (hasPlan && Game.time % this.config.build.build_frequency !== 0) {
+            this.manageConstruction()
+            return
+        }
 
         if (this.config.debug) this.startLogs('manageConstruction')
 
@@ -989,8 +1022,10 @@ class RoomHivemind {
                 .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure && t.level < v.level) === -1)
                 .filter((v, i, a) => a.findIndex(t => t.x === v.x && t.y === v.y && t.structure === v.structure) === i)
 
-                // remove structures that are blocked
-                .filter(({ x, y, structure }) => isWalkable(x, y))
+                // Ramparts stack on existing structures; everything else needs an empty tile
+                .filter(({ x, y, structure }) => structure === STRUCTURE_RAMPART
+                    ? x >= 0 && x <= 49 && y >= 0 && y <= 49
+                    : isWalkable(x, y))
 
         const planRoads = (
             start: RoomPosition,
@@ -1101,6 +1136,21 @@ class RoomHivemind {
             })
         })
 
+        if (this.controllerLevel >= 3) {
+            for (const structure of [...this.spawns, ...this.towers]) {
+                const already = this.structures.some(s =>
+                    s.structureType === STRUCTURE_RAMPART && s.pos.x === structure.pos.x && s.pos.y === structure.pos.y
+                )
+                if (already) continue
+                buildableStructures.push({
+                    x: structure.pos.x,
+                    y: structure.pos.y,
+                    structure: STRUCTURE_RAMPART,
+                    level: 3,
+                })
+            }
+        }
+
         buildableStructures = filterPositions(buildableStructures)
             .sort((a, b) => a.level - b.level) // sort by level, top is done first
 
@@ -1139,9 +1189,9 @@ class RoomHivemind {
 
             const result = this.room.createConstructionSite(buildable.x, buildable.y, buildable.structure as BuildableStructureConstant)
 
-            if (result === ERR_FULL || result === ERR_RCL_NOT_ENOUGH) { // too many construction sites -OR- Room Controller Level insufficient
-                if (this.config.debug) this.log('manageConstruction', `  - **Not enough resources to build:** ${buildable.structure}`)
-                this.room.memory.buildables.shift()
+            if (result === ERR_FULL || result === ERR_RCL_NOT_ENOUGH) {
+                if (this.config.debug) this.log('manageConstruction', `  - **paused:** ${buildable.structure} ${result}`)
+                break
             }
             else if (result === OK) {
                 totalConstructions++

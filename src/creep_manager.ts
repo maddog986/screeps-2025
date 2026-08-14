@@ -104,6 +104,7 @@ class CreepManager {
 
         // Determine valid targets based on role
         let validTargets: TargetTypes[] = [...this.manager.containers, ...this.manager.links]
+        if (this.manager.storage) validTargets.push(this.manager.storage)
 
         if (isHarvester) {
             validTargets.push(...this.manager.sourcesActive, ...this.manager.remoteSources)
@@ -157,6 +158,18 @@ class CreepManager {
             }
             else if (target instanceof StructureController) {
                 task = 'upgrade'
+            }
+            else if (target instanceof StructureStorage) {
+                const roomNeedsFill = this.manager.energyAvailable < this.manager.energyCapacityAvailable
+                if (roomNeedsFill && creepFreeCapacity > 0 && targetUsedCapacity > 0) {
+                    task = 'withdraw'
+                } else if (creepUsedCapacity > 0 && targetFreeCapacity > 0) {
+                    task = 'transfer'
+                } else if (creepFreeCapacity > 0 && targetUsedCapacity > 0) {
+                    task = 'withdraw'
+                } else {
+                    return false
+                }
             }
             else if (target instanceof StructureContainer || target instanceof StructureLink) {
                 const containersCloseBy = this.manager.containers.filter(container => container.pos.getRangeToCached(this.creep.pos) <= 3)
@@ -261,6 +274,9 @@ class CreepManager {
             else if (target instanceof StructureController) {
                 priorityFactor += this.getUpgradeScore(target)
             }
+            else if (target instanceof StructureStorage) {
+                priorityFactor += this.getStorageScore(target, task, actAsMule)
+            }
             else if (target instanceof StructureContainer || target instanceof StructureLink) {
                 const isNearSpawn = this.manager.spawns.some(spawn => target.pos.getRangeToCached(spawn.pos) <= 7)
                 const isNearController = this.manager.controller ? target.pos.getRangeToCached(this.manager.controller!.pos) <= 7 : false
@@ -297,6 +313,27 @@ class CreepManager {
             .join('\n      - '))
 
         return scores
+    }
+
+    private getStorageScore(target: StructureStorage, task: TaskAction, actAsMule: boolean): number {
+        const roomNeedsFill = this.manager.energyAvailable < this.manager.energyCapacityAvailable
+        const assignedCreeps = this.manager.creeps.filter(c => c.hasTaskById(target.id))
+        const assignedCreepsStored = assignedCreeps.reduce((acc, c) => acc + this.manager.usedCapacity(c), 0)
+        const assignedCreepsFree = assignedCreeps.reduce((acc, c) => acc + this.manager.freeCapacity(c), 0)
+
+        let score = 8
+
+        if (task === 'transfer') {
+            score += roomNeedsFill ? -15 : 18
+            score += this.creep.role === 'harvester' ? 6 : 0
+            score += assignedCreepsStored > this.manager.freeCapacity(target) ? -100 : 0
+        } else {
+            score += roomNeedsFill && actAsMule ? 22 : 0
+            score += this.creep.role === 'upgrader' ? -40 : 0
+            score += assignedCreepsFree > this.manager.usedCapacity(target) ? -100 : 0
+        }
+
+        return score
     }
 
     private getContainerScore(target: StructureContainer | StructureLink, task: TaskAction, distanceToTarget: number, actAsMule: boolean, isNearSpawn: boolean, isNearController: boolean, isNearSource: boolean): number {
@@ -426,6 +463,8 @@ class CreepManager {
         score += target.structureType === STRUCTURE_TOWER ? 2 : 0
         score += target.structureType === STRUCTURE_WALL ? 1 : 0
         score += target.structureType === STRUCTURE_CONTAINER ? 4 : 0
+        score += target.structureType === STRUCTURE_STORAGE ? 8 : 0
+        score += target.structureType === STRUCTURE_RAMPART ? 0.5 : 0
         score += (target.progress / target.progressTotal) * 2
 
         return score
