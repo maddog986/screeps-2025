@@ -1,0 +1,55 @@
+name: Deploy to Screeps sim
+
+on:
+  push:
+    branches: [hivemind]
+  pull_request:
+    branches: [hivemind]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Screeps code branch to overwrite
+        required: true
+        default: sim
+        type: choice
+        options:
+          - sim
+          - main
+
+concurrency:
+  group: screeps-sim-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm install
+
+      - name: Require SCREEPS_TOKEN
+        env:
+          SCREEPS_TOKEN: ${{ secrets.SCREEPS_TOKEN }}
+        run: |
+          if [ -z "$SCREEPS_TOKEN" ]; then
+            echo "::error::Add a repository secret named SCREEPS_TOKEN."
+            echo "Create a full-access token at https://screeps.com/a/#!/account/auth-tokens"
+            echo "Then add it at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions"
+            echo "Also create a 'sim' branch once in the Screeps client (Script tab) if it does not exist."
+            exit 1
+          fi
+
+      - name: Build and upload
+        env:
+          SCREEPS_TOKEN: ${{ secrets.SCREEPS_TOKEN }}
+          SCREEPS_BRANCH: ${{ github.event.inputs.branch || 'sim' }}
+        run: npm run push-sim
