@@ -1,4 +1,3 @@
-import { CONFIG } from 'config'
 import RoomHivemind, { TASK_ACTIONS } from 'room_hivemind'
 
 
@@ -73,17 +72,7 @@ class CreepManager {
         }
 
         if (isClaimer) {
-            const wantedRoom = Object.entries(CONFIG.rooms).filter(([roomName, room]) => {
-                if (roomName === 'default') return false
-
-                if (Game.rooms[roomName]?.controller?.my || Memory.rooms[roomName]?.owner) {
-                    return false
-                }
-
-                return true
-            })
-                .map(([roomName]) => roomName)
-                .shift()
+            const wantedRoom = this.manager.getExpansionTargets()[0]
 
             if (wantedRoom) {
                 if (this.manager.config.debug) this.manager.log('manageCreeps', `  - **new claim:** ${wantedRoom}`)

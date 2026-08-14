@@ -1,7 +1,7 @@
 import { CONFIG } from 'config'
 
 export const TASK_ACTIONS = ['harvest', 'transfer', 'upgrade', 'renew', 'recycle', 'build', 'withdraw', 'pickup', 'repair', 'attack', 'move', 'scout', 'claim'] as const
-export const CREEP_ROLES = ['harvester', 'upgrader', 'mule', 'defender', 'builder', 'scout', 'claimer'] as const
+export const CREEP_ROLES = ['harvester', 'mule', 'builder', 'upgrader', 'defender', 'scout', 'claimer'] as const
 
 declare global { // using global declaration to extend the existing types
     type TaskAction = (typeof TASK_ACTIONS)[number]
@@ -155,7 +155,7 @@ class RoomHivemind {
     wanted: boolean = false
 
     constructor(public room: Room) {
-        this.wanted = room.name in CONFIG.rooms || room.name === 'sim'
+        this.wanted = !!room.controller?.my || room.name in CONFIG.rooms || room.name === 'sim'
         this.room = room
         this.config = CONFIG?.rooms[room.name] ?? CONFIG.rooms.default
 
@@ -278,35 +278,56 @@ class RoomHivemind {
     }
 
     private manageCreepsSetup() {
+        const sourceCount = Math.max(1, this.sources.length)
+        const hasSourceContainers = this.containersNearSources.length > 0
+        const ownedRoomCount = Object.values(Game.rooms).filter(r => r.controller?.my).length
+        const canClaimAnother = Game.gcl.level > ownedRoomCount
+        const expansionTarget = this.getExpansionTargets()[0]
+
+        // No source containers yet: several small generalists harvest / upgrade / build.
+        // After containers: one dedicated miner per source; bodies scale with RCL.
         this.creepsSetup.harvester = {
             body: this.buildCreepBody(900, { move: 3, work: 1, carry: 2 }, HARVEST_POWER, 12),
-            max: 0
+            max: hasSourceContainers
+                ? sourceCount
+                : Math.max(2, Math.min(this.sourceWalkablePositionsTotal || 3, 4))
         }
 
         this.creepsSetup.mule = {
             body: this.buildCreepBody(600, { move: 1, carry: 2 }),
-            max: 0
+            max: this.containersNearSources.length
+                + (this.containersNearSpawns.length > 0 ? 1 : 0)
+                + (this.containersNearController.length > 0 && this.controllerLevel >= 3 ? 1 : 0)
+        }
+
+        this.creepsSetup.builder = {
+            body: this.buildCreepBody(550, { move: 2, work: 1, carry: 1 }, BUILD_POWER, 6),
+            max: this.constructionSites.length === 0
+                ? 0
+                : (this.containers.length > 0 && this.constructionSites.length >= 3 ? 2 : 1)
         }
 
         this.creepsSetup.upgrader = {
             body: this.buildCreepBody(1200, { move: 2, work: 2, carry: 1 }, UPGRADE_CONTROLLER_POWER, 12),
-            max: 0
+            max: this.controllerLevel < 2
+                ? 0
+                : (this.controllerLevel >= 4 && this.containersNearController.length > 0 ? 2 : 1)
         }
 
-        this.creepsSetup.builder = {
-            body: this.buildCreepBody(300, { move: 3, work: 1, carry: 1 }, BUILD_POWER, 4),
-            max: 0
+        this.creepsSetup.defender = {
+            body: this.buildCreepBody(560, { move: 2, attack: 2, tough: 1 }),
+            max: this.threatLevel >= 2 ? 1 : 0
         }
 
-        this.creepsSetup.harvester.max += 1
+        this.creepsSetup.scout = {
+            body: [MOVE],
+            max: CONFIG.autonomy.explore && this.controllerLevel >= 3 && this.threatLevel === 0 ? 1 : 0
+        }
 
-        this.creepsSetup.mule.max += this.containersNearSources.length >= 1 ? 1 : 0
-        this.creepsSetup.mule.max += this.containersNearSpawns.length >= 1 ? 1 : 0
-        this.creepsSetup.mule.max += this.containersNearController.length >= 1 ? 1 : 0
-
-        this.creepsSetup.upgrader.max += this.controllerLevel >= 2.1 ? 1 : 0
-
-        this.creepsSetup.builder.max += this.containers.length > 0 && this.constructionSites.length >= 1 ? 1 : 0
+        this.creepsSetup.claimer = {
+            body: [CLAIM, MOVE, MOVE, MOVE],
+            max: CONFIG.autonomy.expand && this.controllerLevel >= 4 && this.threatLevel === 0 && canClaimAnother && !!expansionTarget ? 1 : 0
+        }
 
         if (this.config.debug) this.log('manageRoles', `\n#5aff6f[##manageRoles##]`, this.creepsSetup)
     }
@@ -314,18 +335,13 @@ class RoomHivemind {
     private manageNewClaim() {
         if (this.controllerLevel < 4 || this.threatLevel > 0) return
 
-        // helps newly claimed rooms construct spawn by sending harvesters
-        this.helpRooms = Object.entries(CONFIG.rooms).filter(([roomName, room]) => {
-            if (roomName === 'default') return false
-            return true
-        })
-            .map(([roomName]) => roomName)
-            // sort rooms by distance to current room
-            .sort((a, b) => {
-                const distA = Game.map.getRoomLinearDistance(this.room.name, a)
-                const distB = Game.map.getRoomLinearDistance(this.room.name, b)
-                return distA - distB
-            })
+        const configured = Object.keys(CONFIG.rooms).filter(name => name !== 'default')
+        const ownedOthers = Object.values(Game.rooms)
+            .filter(r => r.controller?.my && r.name !== this.room.name)
+            .map(r => r.name)
+
+        this.helpRooms = [...new Set([...configured, ...ownedOthers, ...this.getExpansionTargets()])]
+            .sort((a, b) => Game.map.getRoomLinearDistance(this.room.name, a) - Game.map.getRoomLinearDistance(this.room.name, b))
 
         if (!this.helpRooms.length) return
 
@@ -334,44 +350,75 @@ class RoomHivemind {
             if (!room) return
 
             const newRoomThreatLevel = room.manager.getThreatLevel()
+            if (newRoomThreatLevel > 0) return
 
-            // help construct spawn by sending harvesters
-            if (newRoomThreatLevel === 0) {
-                const doWeOwnIt = room.controller && room.controller.my
+            const doWeOwnIt = !!room.controller?.my
 
-                if (!doWeOwnIt) {
-                    // get sources from remote room
-                    this.remoteSources = room.manager.sources
-                }
+            if (!doWeOwnIt) {
+                this.remoteSources = room.manager.sources
+                return
+            }
 
-                if (doWeOwnIt && room.manager.constructionSites.some(cs => cs.structureType === STRUCTURE_SPAWN)) {
-                    // spawn more harvesters
-                    this.creepsSetup.harvester.max += 2
+            if (!room.manager.constructionSites.some(cs => cs.structureType === STRUCTURE_SPAWN) && room.manager.spawns.length > 0) {
+                return
+            }
 
-                    // can this room spare a harvester?
-                    const canSpareHarvester = this.creepsByRole.harvester.length < this.sourceWalkablePositionsTotal * 0.4
-                    const roomHasMaxHarvesters = room.manager.creepsByRole?.harvester?.length >= room.manager.sourceWalkablePositionsTotal
+            // New owned room still needs a spawn — this room can send a spare harvester
+            this.creepsSetup.harvester.max += 1
 
-                    if (canSpareHarvester && !roomHasMaxHarvesters) {
-                        const harvester = room.manager.creepsByRole.harvester
-                            // sort by used capacity
-                            .sort((a, b) => room.manager.usedCapacity(a) - room.manager.usedCapacity(b))
-                            .shift()
+            const homeNeed = Math.max(1, this.sources.length)
+            const canSpareHarvester = this.creepsByRole.harvester.filter(c => !c.spawning).length > homeNeed
+            const roomHasMaxHarvesters = (room.manager.creepsByRole.harvester?.length ?? 0) >= Math.max(1, room.manager.sources.length)
 
-                        // reassign harvester to help new room
-                        if (harvester) {
-                            harvester.drop(RESOURCE_ENERGY)
-                            harvester.memory.room = room.name
-                            harvester.tasks = [{
-                                action: 'harvest',
-                                id: room.manager.sources[0].id
-                            }]
-                            room.manager.creepsByRole.harvester.push(harvester)
-                        }
-                    }
-                }
+            if (!canSpareHarvester || roomHasMaxHarvesters || room.manager.sources.length === 0) return
+
+            const harvester = [...this.creepsByRole.harvester]
+                .filter(c => !c.spawning)
+                .sort((a, b) => this.usedCapacity(a) - this.usedCapacity(b))
+                .shift()
+
+            if (harvester) {
+                harvester.drop(RESOURCE_ENERGY)
+                harvester.memory.room = room.name
+                harvester.tasks = [{
+                    action: 'harvest',
+                    id: room.manager.sources[0].id
+                }]
+                room.manager.creepsByRole.harvester.push(harvester)
             }
         })
+    }
+
+    /**
+     * Rooms this colony should grow into: configured names first, then scouted
+     * unowned neighbors of rooms we already own.
+     */
+    public getExpansionTargets(): string[] {
+        const owned = new Set(
+            Object.values(Game.rooms).filter(r => r.controller?.my).map(r => r.name)
+        )
+
+        const isTaken = (name: string): boolean => {
+            if (owned.has(name)) return true
+            if (Game.rooms[name]?.controller?.my) return true
+            const owner = Memory.rooms[name]?.owner
+            return !!owner
+        }
+
+        const fromConfig = Object.keys(CONFIG.rooms)
+            .filter(name => name !== 'default' && !isTaken(name))
+
+        const fromMemory = Object.entries(Memory.rooms ?? {})
+            .filter(([name, memory]) => {
+                if (isTaken(name) || name === this.room.name) return false
+                if ((memory.threatLevel ?? 0) >= 2) return false
+                if (!memory.sources?.length) return false
+                return [...owned].some(ownedName => Game.map.getRoomLinearDistance(ownedName, name) <= 1)
+            })
+            .map(([name]) => name)
+
+        return [...fromConfig, ...fromMemory.filter(name => !fromConfig.includes(name))]
+            .sort((a, b) => Game.map.getRoomLinearDistance(this.room.name, a) - Game.map.getRoomLinearDistance(this.room.name, b))
     }
 
     public getAdjacentRooms(): string[] {

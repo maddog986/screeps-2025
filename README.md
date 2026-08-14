@@ -1,6 +1,6 @@
 # Hivemind
 
-A TypeScript Screeps AI. Each owned room is run by a **RoomHivemind** that surveys the room, places buildings, fills spawn queues, and runs towers/links. Creeps do not follow hardcoded state machines. They pick a scored **task** (harvest, haul, build, upgrade, fight, scout, claim) and execute it through `CreepManager`.
+A TypeScript Screeps AI. The intended loop is: **place one spawn, then watch the colony grow.** Each owned room is run by a **RoomHivemind** that surveys the room, places buildings, fills spawn queues, and runs towers/links. Creeps do not follow hardcoded state machines. They pick a scored **task** (harvest, haul, build, upgrade, fight, scout, claim) and execute it through `CreepManager`. Quotas and the bunker stencil unlock from RCL and infrastructure, so the same code bootstraps a brand-new spawn and later expands into scouted neighbors.
 
 This repo started from [screeps-typescript-starter](https://github.com/screepers/screeps-typescript-starter). The `hivemind` branch is the latest working design.
 
@@ -25,23 +25,23 @@ Room and creep managers are attached as prototypes (`room.manager`, `creep.manag
 - Maintains a per-tick **shadow store** (`transfers`) so two creeps do not both plan to withdraw the last 50 energy from the same container.
 - For owned rooms: sizes creep bodies, attacks/heals/repairs with towers, plans the bunker, pumps source links toward spawn/controller links, and spawns whatever role is under quota.
 
-A room is "wanted" if it appears in `CONFIG.rooms` (or is `sim`). Wanted rooms get the full structure scan and build planner even before they are fully owned.
+Any **owned** room (plus `sim` and names listed in `CONFIG.rooms`) gets the full structure scan and build planner. You do not have to pre-register a room for a placed spawn to start working. `CONFIG.rooms` is for per-room overrides (`spawnPos`, bunker, debug) and optional expansion hints.
 
 ### Spawn quotas
 
-Bodies scale with `energyCapacityAvailable`. Quotas start conservative and grow with infrastructure:
+Bodies scale with `energyCapacityAvailable`. Quotas react to what the room already has — that is the "grows on its own" part. Spawn order is harvester → mule → builder → upgrader → defender → scout → claimer.
 
 | Role | When it spawns | Job |
 | --- | --- | --- |
-| `harvester` | Always at least 1 | Mine sources. Dump into nearby containers/links. Will upgrade/build/haul if those specialists do not exist yet. |
-| `mule` | +1 per source, spawn, or controller container | Move energy: source containers → spawn/extensions/towers → controller container. |
-| `upgrader` | Controller level ≥ 2.1 | Sit on the controller and pull from the nearby container/link. |
-| `builder` | Containers exist and there are construction sites | Build the bunker and roads. |
-| `defender` | Quota stays 0 unless you raise it | Attack hostiles in this room, or travel to a threatened help room. |
-| `scout` | Quota stays 0 unless you raise it | Walk adjacent rooms so `Memory.rooms` stays fresh. |
-| `claimer` | Quota stays 0 unless you raise it | Claim or reserve the next unowned room listed in `CONFIG.rooms`. |
+| `harvester` | 2–4 generalists before source containers; then 1 per source | Mine sources. Dump into nearby containers/links. Will upgrade/build/haul if those specialists do not exist yet. |
+| `mule` | +1 per source container, +1 if a spawn container exists, +1 controller container at RCL 3+ | Move energy: source containers → spawn/extensions/towers → controller container. |
+| `builder` | Any construction sites (2 if there are 3+ sites and containers) | Build the bunker and roads. |
+| `upgrader` | RCL 2+ (2 at RCL 4 with a controller container) | Sit on the controller and pull from the nearby container/link. |
+| `defender` | Threat level ≥ 2 | Attack hostiles in this room, or travel to a threatened help room. |
+| `scout` | RCL 3+, safe, `CONFIG.autonomy.explore` | Walk adjacent rooms so `Memory.rooms` stays fresh. |
+| `claimer` | RCL 4+, safe, spare GCL, and an expansion target, `CONFIG.autonomy.expand` | Claim or reserve the next target. |
 
-Harvesters bootstrap a new room alone. Once containers go up, mules take over logistics and harvesters stay on the sources.
+A brand-new spawn starts with a handful of small harvesters. They harvest, upgrade the controller, and build the first containers. After that, mules and specialists appear as the bunker unlocks.
 
 ### Energy flow
 
@@ -81,11 +81,14 @@ Every `build_frequency` ticks the planner:
 
 ### Expansion
 
-Rooms listed in `CONFIG.rooms` (other than `default`) are expansion targets.
+Outward growth is meant to happen without a scripted room list.
 
-- At RCL 4+, a safe room treats those names as **help rooms**. If a target is visible and unowned, its sources are treated as remote harvest targets. If it is owned but still building a spawn, this room can reassign a spare harvester to go help.
-- A claimer (if you set `creepsSetup.claimer.max`) walks to the first configured room that is not yours and `claimController`s it. If GCL is not high enough it reserves and signs instead.
-- A scout (if you set `creepsSetup.scout.max`) walks `Game.map.describeExits` neighbors, revisiting rooms whose `Memory.rooms[name].lastSeen` is older than 150 ticks (300 if they were threatening).
+1. A scout walks `Game.map.describeExits` neighbors and writes `Memory.rooms` (owner, sources, threat, lastSeen). Stale rooms are revisited after 150 ticks (300 if they were threatening).
+2. `getExpansionTargets()` prefers unowned names in `CONFIG.rooms`, then scouted unowned neighbors of rooms you already own (must have sources and threat &lt; 2).
+3. A claimer walks to the nearest target and `claimController`s it. If GCL is not high enough it reserves and signs instead.
+4. At RCL 4+, a safe home room treats those targets (and other owned rooms) as **help rooms**. Visible unowned rooms become remote harvest targets. A newly claimed room still building its spawn can receive a spare home harvester.
+
+Set `CONFIG.autonomy.explore` / `expand` to `false` to keep a single-room colony.
 
 ### Combat
 
@@ -117,13 +120,16 @@ CONFIG.visuals.show_transfers    // shadow-store deltas
 CONFIG.visuals.show_matrix       // reserved
 CONFIG.visuals.creep_travel      // reserved
 
-CONFIG.rooms.default             // fallback for rooms not listed by name
-CONFIG.rooms.W8N3                // per-room debug + bunker + spawnPos
+CONFIG.autonomy.explore          // spawn scouts (default true)
+CONFIG.autonomy.expand           // spawn claimers when GCL allows (default true)
+
+CONFIG.rooms.default             // fallback bunker / spawnPos for any unlisted room
+CONFIG.rooms.W8N3                // optional per-room debug + bunker + spawnPos
 ```
 
-`debug` is a list of channels: `manageCreeps`, `manageSpawns`, `manageTowers`, `manageConstruction`, `manageRoles`, `manageLinks`. Enabled channels dump an HTML log at the end of the tick. Leave it empty (or omit it) in production — `manageCreeps` is expensive.
+`debug` is a list of channels: `manageCreeps`, `manageSpawns`, `manageTowers`, `manageConstruction`, `manageRoles`, `manageLinks`. Enabled channels dump an HTML log at the end of the tick. Leave it empty (or omit it) — `manageCreeps` is expensive.
 
-**Update `CONFIG.rooms` to your rooms before deploying.** The checked-in names (`W8N3`, `W7N3`, `W7N4`) and `spawnPos` values are from the original shard. `default` is used for any other visible room, including the simulator.
+`CONFIG.rooms` entries other than `default` are optional. Use them to pin `spawnPos` on a claim or to bias expansion toward specific rooms. `default` covers the simulator and any owned room you have not listed. The checked-in `W8N3` / `W7N3` / `W7N4` values are from the original shard.
 
 ## Project layout
 
@@ -168,8 +174,7 @@ npm run lint
 
 ## Known gaps
 
-- Scout and claimer quotas default to 0. Expansion code is implemented; it will not spawn those creeps until you raise `max`.
-- Defender quota is also 0. Towers are the live defense.
 - Squad idle movement uses a hardcoded coordinate.
 - Bunker stencil is filled through RCL 5. Storage, terminal, and later structures are in the letter map but not in the current layout.
-- `hivemind` is the branch that was being brought online. Expect scoring weights to need live tuning.
+- Expansion picks the nearest safe scouted neighbor; it does not yet score mineral type, source count, or remote distance beyond one hop.
+- Scoring weights still need live tuning. The design is emergent (highest-score task wins), not a scripted RCL checklist.
