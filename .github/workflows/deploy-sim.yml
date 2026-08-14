@@ -25,6 +25,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: Screeps
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -43,10 +44,10 @@ jobs:
           SCREEPS_TOKEN: ${{ secrets.SCREEPS_TOKEN }}
         run: |
           if [ -z "$SCREEPS_TOKEN" ]; then
-            echo "::error::SCREEPS_TOKEN is empty. It must be a *repository* secret (not an Environment secret)."
+            echo "::error::SCREEPS_TOKEN is empty on the Screeps environment."
+            echo "Add it at https://github.com/${GITHUB_REPOSITORY}/settings/environments/Screeps"
+            echo "or as a repository secret at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions"
             echo "Create a full-access token at https://screeps.com/a/#!/account/auth-tokens"
-            echo "Then add it at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions"
-            echo "Name it exactly SCREEPS_TOKEN. Also create a 'sim' branch in the Screeps Script tab if needed."
             exit 1
           fi
 

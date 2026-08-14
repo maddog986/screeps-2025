@@ -180,13 +180,13 @@ One-time setup:
 
 1. In the Screeps client, open **Script** and create a branch named `sim` if it does not exist. The API will not create it for you.
 2. Create a **full access** auth token at [screeps.com/a/#!/account/auth-tokens](https://screeps.com/a/#!/account/auth-tokens).
-3. Add it as a GitHub Actions secret named `SCREEPS_TOKEN`:
-   `https://github.com/maddog986/screeps-2025/settings/secrets/actions`
+3. Add it as `SCREEPS_TOKEN` on the GitHub **Screeps** environment
+   (`Settings → Environments → Screeps`), which is what this workflow reads.
 4. In the simulator, set the active branch to **sim**.
 
 After that, each push to `hivemind` or a `cursor/**` branch overwrites `sim`. Use **Actions → Deploy to Screeps sim → Run workflow** to push `sim` or `main` by hand.
 
-`SCREEPS_TOKEN` must be a **repository** secret (Settings → Secrets and variables → Actions → Repository secrets). Environment secrets are not visible to this job.
+`SCREEPS_TOKEN` lives on the **Screeps** GitHub Environment (`Settings → Environments → Screeps`). The deploy job sets `environment: Screeps` so that secret is injected. A repository-level secret with the same name also works.
 
 The token is read from the environment (`SCREEPS_TOKEN`). It is never committed. `screeps.json` stays local-only.
 
