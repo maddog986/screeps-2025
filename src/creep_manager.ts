@@ -115,6 +115,22 @@ class CreepManager {
         if (isUpgrader || actAsUpgrader) {
             validTargets.push(controller)
         }
+
+        // Fallback fuel: before a logistics network exists (no container/link/storage
+        // holding energy, no dropped energy), a dedicated builder/upgrader has no way
+        // to get energy and would sit idle. Let any WORK creep harvest directly until
+        // there is something to withdraw from. Harvest score is scaled by free capacity,
+        // so once full they return to building/upgrading, and once containers hold energy
+        // this branch stops adding sources (they withdraw instead).
+        const hasWithdrawableEnergy =
+            this.manager.containers.some(c => this.manager.usedCapacity(c) > 0)
+            || this.manager.links.some(l => this.manager.usedCapacity(l) > 0)
+            || (this.manager.storage ? this.manager.usedCapacity(this.manager.storage) > 0 : false)
+            || this.manager.droppedResources.length > 0
+
+        if ((isBuilder || isUpgrader) && !hasWithdrawableEnergy && this.creep.body.some(b => b.type === WORK)) {
+            validTargets.push(...this.manager.sourcesActive)
+        }
         if (isMule || actAsMule) {
             validTargets.push(...this.manager.refillables, ...this.manager.droppedResources)
         }
@@ -293,7 +309,11 @@ class CreepManager {
             else if ((target instanceof StructureSpawn || target instanceof StructureExtension || target instanceof StructureTower)) {
                 const isNearSpawn = this.manager.spawns.some(spawn => target.pos.getRangeToCached(spawn.pos) <= 7)
 
-                priorityFactor += this.getSpawnStructuresScore(target, task, distanceToTarget, actAsMule, isNearSpawn) * (creepUsedCapacity / creepFreeCapacity)
+                // Scale by how full the creep is (0..1). Using free capacity as the
+                // divisor blows up to Infinity when the creep is full, which made
+                // spawn-fill always beat every other task (e.g. upgrading) and starved
+                // the controller. Fraction-of-capacity keeps it bounded and comparable.
+                priorityFactor += this.getSpawnStructuresScore(target, task, distanceToTarget, actAsMule, isNearSpawn) * (creepCarryCapacity > 0 ? creepUsedCapacity / creepCarryCapacity : 0)
             }
 
             const distanceFactor = ((isSlowMover ? 0.5 : 1) - ((distance / 50) * 3)) * 0.35
