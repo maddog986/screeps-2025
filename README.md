@@ -35,10 +35,10 @@ Bodies scale with `energyCapacityAvailable`. Quotas react to what the room alrea
 
 | Role | When it spawns | Job |
 | --- | --- | --- |
-| `harvester` | 2–4 generalists before source containers; then 1 static miner per source (5 WORK at 550 energy) | Mine sources. Dump into nearby containers/links. Will upgrade/build/haul if those specialists do not exist yet. |
-| `mule` | +1 per source container, +1 spawn container, +1 controller container at RCL 3+, +1 if storage exists | Move energy: source containers → spawn/extensions/towers → storage (RCL 4) → controller container. |
-| `builder` | Any construction sites (2 if there are 3+ sites and containers) | Build the bunker and roads. |
-| `upgrader` | RCL 2+ (2 at RCL 4 with a controller container) | Sit on the controller and pull from the nearby container/link. |
+| `harvester` | RCL 1: several 200-energy WCM generalists. 5W miners only after 5 extensions, a source container, and a hauler | Mine, upgrade, and build until specialists exist. Then sit on sources. |
+| `mule` | First cheap hauler after a source container and 2 workers. More only at 550+ capacity | Source containers → spawn/extensions → storage (RCL 4) → controller. |
+| `builder` | RCL 2+ when sites exist (generalists build at RCL 1) | Bunker and roads. |
+| `upgrader` | RCL 2+ (still a 200-energy body until 550 capacity) | Controller. |
 | `defender` | Threat level ≥ 2 | Attack hostiles in this room, or travel to a threatened help room. |
 | `scout` | RCL 3+, safe, `CONFIG.autonomy.explore` | Walk adjacent rooms so `Memory.rooms` stays fresh. |
 | `claimer` | RCL 4+, safe, spare GCL, and an expansion target, `CONFIG.autonomy.expand` | Claim or reserve the next target. |

@@ -281,49 +281,68 @@ class RoomHivemind {
         this.manageCreeps()                 // manage creeps
     }
 
+    private earlyWorkerBody(capacity: number): BodyPartConstant[] {
+        if (capacity < 250) return [WORK, CARRY, MOVE]
+        if (capacity < 400) return [WORK, WORK, CARRY, MOVE]
+        return [WORK, WORK, CARRY, CARRY, MOVE, MOVE]
+    }
+
     private manageCreepsSetup() {
+        const capacity = this.energyCapacityAvailable
+        const rcl = this.controller?.level ?? 0
         const sourceCount = Math.max(1, this.sources.length)
+        const walkable = this.sourceWalkablePositionsTotal || sourceCount * 2
         const hasSourceContainers = this.containersNearSources.length > 0
+        const hasHaul = this.creepsByRole.mule.filter(c => !c.spawning).length > 0
+            || this.containersNearSpawns.length > 0
+            || !!this.storage
         const ownedRoomCount = Object.values(Game.rooms).filter(r => r.controller?.my).length
         const canClaimAnother = Game.gcl.level > ownedRoomCount
         const expansionTarget = this.getExpansionTargets()[0]
 
-        // No source containers yet: several small generalists harvest / upgrade / build.
-        // After containers: one static miner per source (5 WORK once the room can afford 550).
+        // 5-WORK miners only after five extensions exist and something hauls.
+        // Until then the room stays on cheap generalists (200 energy at RCL 1).
+        const useStaticMiners = capacity >= 550 && this.extensions.length >= 5 && hasSourceContainers && hasHaul
+
         this.creepsSetup.harvester = {
-            body: hasSourceContainers
-                ? this.buildCreepBody(
-                    this.energyCapacityAvailable >= 550 ? 550 : 300,
-                    this.energyCapacityAvailable >= 550 ? { move: 1, work: 5, carry: 1 } : { move: 1, work: 2, carry: 1 },
-                    HARVEST_POWER,
-                    10
-                )
-                : this.buildCreepBody(900, { move: 3, work: 1, carry: 2 }, HARVEST_POWER, 12),
-            max: hasSourceContainers
+            body: useStaticMiners
+                ? [WORK, WORK, WORK, WORK, WORK, CARRY, MOVE]
+                : this.earlyWorkerBody(capacity),
+            max: useStaticMiners
                 ? sourceCount
-                : Math.max(2, Math.min(this.sourceWalkablePositionsTotal || 3, 4))
+                : Math.max(3, Math.min(walkable, capacity <= 300 ? 5 : 4))
         }
 
         this.creepsSetup.mule = {
-            body: this.buildCreepBody(600, { move: 1, carry: 2 }),
-            max: this.containersNearSources.length
+            body: capacity >= 400
+                ? this.buildCreepBody(Math.min(capacity, 600), { move: 1, carry: 2 })
+                : [CARRY, CARRY, MOVE],
+            max: 0
+        }
+        if (hasSourceContainers && this.creepsByRole.harvester.length >= 2) {
+            this.creepsSetup.mule.max = 1
+        }
+        if (capacity >= 550 && hasSourceContainers) {
+            this.creepsSetup.mule.max = Math.min(3,
+                this.containersNearSources.length
                 + (this.containersNearSpawns.length > 0 ? 1 : 0)
-                + (this.containersNearController.length > 0 && this.controllerLevel >= 3 ? 1 : 0)
+                + (this.containersNearController.length > 0 && rcl >= 3 ? 1 : 0)
                 + (this.storage ? 1 : 0)
+            )
         }
 
         this.creepsSetup.builder = {
-            body: this.buildCreepBody(550, { move: 2, work: 1, carry: 1 }, BUILD_POWER, 6),
-            max: this.constructionSites.length === 0
+            body: this.earlyWorkerBody(Math.min(capacity, 400)),
+            max: this.constructionSites.length === 0 || rcl < 2
                 ? 0
-                : (this.containers.length > 0 && this.constructionSites.length >= 3 ? 2 : 1)
+                : (this.constructionSites.length >= 4 && capacity >= 550 ? 2 : 1)
         }
 
         this.creepsSetup.upgrader = {
-            body: this.buildCreepBody(1200, { move: 2, work: 2, carry: 1 }, UPGRADE_CONTROLLER_POWER, 12),
-            max: this.controllerLevel < 2
-                ? 0
-                : (this.controllerLevel >= 4 && this.containersNearController.length > 0 ? 2 : 1)
+            body: capacity >= 550
+                ? this.buildCreepBody(Math.min(capacity, 800), { move: 1, work: 2, carry: 1 }, UPGRADE_CONTROLLER_POWER, 8)
+                : [WORK, CARRY, MOVE],
+            max: rcl < 2 ? 0 : (rcl >= 4 && (this.containersNearController.length > 0 || !!this.storage) ? 2 : 1)
         }
 
         this.creepsSetup.defender = {
