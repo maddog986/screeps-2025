@@ -279,34 +279,44 @@ class Creep {
     getActiveBodyparts(type) { return this.body.filter(b => b.type === type && b.hits > 0).length }
     say() { return C.OK }
 
-    moveTo(target, opts) { return this._step(target.pos || target) }
+    // Movement is an INTENT, resolved at end of tick (see world.resolveMovement).
+    // Returning OK means the intent was registered, NOT that the creep moved.
+    // A creep blocked by a stationary creep will return OK yet stay put, exactly
+    // like the real engine's between-ticks deconfliction phase.
+    moveTo(target, opts) { return this._registerMove(target.pos || target) }
     move(dir) {
         const d = DIR_DELTA[dir]; if (!d) return C.ERR_INVALID_ARGS
-        return this._moveToTile(this.pos.x + d[0], this.pos.y + d[1])
+        const nx = this.pos.x + d[0], ny = this.pos.y + d[1]
+        if (!this.room._terrainStructWalkable(nx, ny)) return C.ERR_NO_PATH
+        this._setIntent(nx, ny)
+        return C.OK
     }
-    _step(targetPos) {
-        if (this.pos.getRangeTo(targetPos) <= 1 && this.pos.isEqualTo(targetPos) === false) {
-            // already adjacent; still counts as OK (no move needed)
-            return C.OK
-        }
-        // choose neighbor minimizing chebyshev distance to target that is walkable+free
-        let best = null, bestScore = Infinity
+    _registerMove(targetPos) {
+        if (this.pos.x === targetPos.x && this.pos.y === targetPos.y) return C.OK
+        const cur = Math.max(Math.abs(this.pos.x - targetPos.x), Math.abs(this.pos.y - targetPos.y))
+        // Pick the neighbor that most reduces Chebyshev distance. Ignore creep
+        // occupancy for the score (creeps may vacate) but prefer an unoccupied tile
+        // on ties so we route around when there is a free alternative. If the only
+        // distance-reducing tile is occupied, we still aim at it and get blocked at
+        // resolution -> OK returned but no movement.
+        let best = null, bestScore = Infinity, bestOcc = true
         for (const [dx, dy] of DIR_LIST) {
             const nx = this.pos.x + dx, ny = this.pos.y + dy
-            if (!this.room._isWalkable(nx, ny, this)) continue
+            if (!this.room._terrainStructWalkable(nx, ny)) continue
             const score = Math.max(Math.abs(nx - targetPos.x), Math.abs(ny - targetPos.y))
-            if (score < bestScore) { bestScore = score; best = [nx, ny] }
+            const occ = !!this.room._creepAt(nx, ny, this)
+            if (score < bestScore || (score === bestScore && bestOcc && !occ)) {
+                bestScore = score; best = [nx, ny]; bestOcc = occ
+            }
         }
         if (!best) return C.ERR_NO_PATH
-        const cur = Math.max(Math.abs(this.pos.x - targetPos.x), Math.abs(this.pos.y - targetPos.y))
-        if (bestScore >= cur) return C.ERR_NO_PATH // no progress possible
-        return this._moveToTile(best[0], best[1])
-    }
-    _moveToTile(nx, ny) {
-        if (!this.room._isWalkable(nx, ny, this)) return C.ERR_NO_PATH
-        this.pos.x = nx; this.pos.y = ny
-        this._moved = true; this._stepsThisLife++
+        if (bestScore >= cur) return C.OK // no progress available this tick; stay
+        this._setIntent(best[0], best[1])
         return C.OK
+    }
+    _setIntent(x, y) {
+        world.moveCounter = (world.moveCounter || 0) + 1
+        this._intent = { x, y, order: world.moveCounter } // last move intent of the tick wins
     }
 
     harvest(source) {
@@ -456,6 +466,20 @@ class Room {
     getPositionAt(x, y) { return new RoomPosition(x, y, this.name) }
 
     _terrainAt(x, y) { return this._terrain[y * 50 + x] === 1 ? 'wall' : 'plain' }
+    // Walkable ignoring creeps (used for move-intent target selection). Creep
+    // collisions are handled separately at movement resolution time.
+    _terrainStructWalkable(x, y) {
+        if (x < 1 || y < 1 || x > 48 || y > 48) return false
+        if (this._terrainAt(x, y) === 'wall') return false
+        for (const s of this._sources) if (s.pos.x === x && s.pos.y === y) return false
+        if (this.controller && this.controller.pos.x === x && this.controller.pos.y === y) return false
+        for (const s of this._structures) if (s.pos.x === x && s.pos.y === y && BLOCKING_STRUCTURES.has(s.structureType)) return false
+        return true
+    }
+    _creepAt(x, y, exclude) {
+        for (const c of this._creepsHere()) if (c !== exclude && c.pos.x === x && c.pos.y === y) return c
+        return null
+    }
     _isWalkable(x, y, mover) {
         if (x < 1 || y < 1 || x > 48 || y > 48) return false
         if (this._terrainAt(x, y) === 'wall') return false
@@ -583,6 +607,57 @@ function createWorld({ username = 'HivemindDev', roomName = 'sim', spawnPos = { 
             structuresBuilt: {},
         },
         totalSites() { return Object.values(this.rooms).reduce((a, r) => a + r._sites.length, 0) },
+        // End-of-tick movement deconfliction, mirroring the real engine:
+        //  - creeps with no move intent stay and block their tile,
+        //  - a mover blocked by a stationary creep does not move (no shoving),
+        //  - contested tiles are won by the earliest-issued intent (command order),
+        //  - chains that end on an empty tile all move; head-on swaps / cycles fail.
+        resolveMovement() {
+            const creeps = Object.values(this.creeps).filter(c => !c.spawning)
+            const active = new Set(creeps.filter(c => c._intent))
+            const stayerTiles = new Set(creeps.filter(c => !c._intent).map(c => `${c.pos.x},${c.pos.y}`))
+
+            // Fixpoint: fail movers blocked by a stayer tile, and resolve contested
+            // tiles by issue order; a loser becomes a stayer and may block others.
+            let changed = true
+            while (changed) {
+                changed = false
+                for (const m of [...active]) {
+                    if (stayerTiles.has(`${m._intent.x},${m._intent.y}`)) {
+                        active.delete(m); stayerTiles.add(`${m.pos.x},${m.pos.y}`); changed = true
+                    }
+                }
+                const byDest = {}
+                for (const m of active) (byDest[`${m._intent.x},${m._intent.y}`] ??= []).push(m)
+                for (const k in byDest) {
+                    if (byDest[k].length > 1) {
+                        byDest[k].sort((a, b) => a._intent.order - b._intent.order)
+                        for (const loser of byDest[k].slice(1)) {
+                            active.delete(loser); stayerTiles.add(`${loser.pos.x},${loser.pos.y}`); changed = true
+                        }
+                    }
+                }
+            }
+
+            // Chain/cycle resolution on remaining movers (functional graph:
+            // each mover points at the active creep currently on its dest tile).
+            const occAt = {}
+            for (const m of active) occAt[`${m.pos.x},${m.pos.y}`] = m
+            const state = new Map()
+            const resolve = (m) => {
+                const s = state.get(m); if (s) return s
+                state.set(m, 'visiting')
+                const occ = occAt[`${m._intent.x},${m._intent.y}`]
+                if (!occ || occ === m) { state.set(m, 'ok'); return 'ok' }
+                const r = resolve(occ)
+                state.set(m, r === 'visiting' ? 'fail' : r) // visiting => part of a cycle
+                return state.get(m)
+            }
+            for (const m of active) resolve(m)
+            for (const m of active) {
+                if (state.get(m) === 'ok') { m.pos.x = m._intent.x; m.pos.y = m._intent.y; m._moved = true; m._stepsThisLife++ }
+            }
+        },
     }
 
     const room = new Room(roomName, terrain)

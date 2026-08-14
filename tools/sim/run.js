@@ -96,7 +96,8 @@ console.log(`\n=== Hivemind local sim: ${TICKS} ticks, spawn @20,26, 2 sources, 
 
 for (let i = 0; i < TICKS; i++) {
     // reset per-tick flags
-    for (const c of Object.values(world.creeps)) { c._moved = false; c._acted = null }
+    for (const c of Object.values(world.creeps)) { c._moved = false; c._acted = null; c._intent = null }
+    world.moveCounter = 0
     // In real Screeps, Game objects are recreated each tick, which resets the
     // bot's per-tick caches (RoomHivemind, CreepManager.creepCompletedActions).
     // We reuse objects across ticks, so clear the cached managers to match.
@@ -112,6 +113,11 @@ for (let i = 0; i < TICKS; i++) {
         console.error('World creeps:', Object.keys(world.creeps))
         process.exit(1)
     }
+
+    // End-of-tick: resolve queued move intents simultaneously (deconfliction),
+    // then run structure/source upkeep. Movement must resolve after all creep
+    // code has run this tick, matching the real engine's between-ticks phase.
+    world.resolveMovement()
 
     // post-loop world updates
     const room = Game.rooms.sim
