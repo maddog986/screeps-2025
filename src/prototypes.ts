@@ -7,10 +7,6 @@ const equalCache: { [key: string]: boolean } = {}
 
 declare global {
     interface RoomPosition {
-        // _rangeCache: { [key: string]: number }
-        // _nearCache: { [key: string]: boolean }
-        // _equalCache: { [key: string]: boolean }
-
         getRangeToCached: (target: RoomPosition) => number
         isNearToCached: (target: RoomPosition) => boolean
         isEqualToCached: (target: RoomPosition) => boolean
@@ -71,31 +67,6 @@ Object.defineProperty(Room.prototype, 'repairThreshold', {
     }
 })
 
-// isNearSpawn
-Object.defineProperty(RoomPosition.prototype, 'isNearSpawn', {
-    get: function () {
-        return this.room.manager.isNearSpawn(this)
-    }
-})
-
-// isNearController
-Object.defineProperty(RoomPosition.prototype, 'isNearController', {
-    get: function () {
-        return this.room.manager.isNearController(this)
-    }
-})
-
-// isNearSource
-Object.defineProperty(RoomPosition.prototype, 'isNearSource', {
-    get: function () {
-        return this.room.manager.isNearSource(this)
-    }
-})
-
-
-
-
-
 // Add RoomPosition.getRangeToCached to include caching
 RoomPosition.prototype.getRangeToCached = function (target: RoomPosition): number {
     const cacheKey = `${this.x},${this.y}-${target.x},${target.y}-${target.roomName}`
@@ -141,16 +112,6 @@ Object.defineProperty(Source.prototype, 'walkablePositions', {
         return this.room.memory.walkablePositions[this.id]
     }
 })
-
-
-
-
-
-
-
-
-
-
 
 Object.defineProperty(Creep.prototype, 'manager', {
     get: function () {

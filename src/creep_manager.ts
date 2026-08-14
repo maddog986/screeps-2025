@@ -1,7 +1,5 @@
 import { CONFIG } from 'config'
-import { getActiveResourcesInfo } from 'process'
 import RoomHivemind, { TASK_ACTIONS } from 'room_hivemind'
-import SquadManager from 'squads'
 
 
 class CreepManager {
@@ -26,7 +24,6 @@ class CreepManager {
     }
 
     private findBestTask(): { task: TaskAction, target: TargetTypes | RoomPosition, score: number }[] {
-        const maxPossibleDistance = 50
         const { role } = this.creep
         const isHarvester = role === 'harvester'
         const isBuilder = role === 'builder'
@@ -60,7 +57,6 @@ class CreepManager {
                 .shift()
 
             if (nextStaleRoom) {
-                // console.log('nextStaleRoom', nextStaleRoom)
                 return [{
                     task: 'scout',
                     target: new RoomPosition(25, 25, nextStaleRoom),
@@ -68,9 +64,7 @@ class CreepManager {
                 }]
             }
 
-            // console.log('no next room or stale room found, fallback to home room')
-
-            // faillback is home room
+            // fallback is home room
             return [{
                 task: 'scout',
                 target: new RoomPosition(25, 25, creepOriginRoom.name),
@@ -109,7 +103,6 @@ class CreepManager {
         const hasUpgraders = this.manager.creepsByRole.upgrader.filter(c => !c.spawning).length > 0
         const constructionSites = this.manager.constructionSites
         const controller = this.manager.controller as StructureController
-        const roomEnergyFull = this.manager.energyAvailable >= this.manager.energyCapacityAvailable
 
         const moveParts = this.creep.body.filter(b => b.type === MOVE).length
         const nonMoveParts = this.creep.body.length - moveParts
@@ -139,7 +132,9 @@ class CreepManager {
             if (this.manager.threatLevel > 0) {
                 validTargets.push(...this.manager.enemies)
             } else {
-                const helpRooms = this.manager.helpRooms.map(roomName => Game.rooms[roomName]).filter(r => r.manager.threatLevel > 0)
+                const helpRooms = this.manager.helpRooms
+                    .map(roomName => Game.rooms[roomName])
+                    .filter((r): r is Room => !!r && r.manager.threatLevel > 0)
                 validTargets.push(...helpRooms.map(r => r.manager.enemies).flat())
             }
         }
@@ -549,10 +544,8 @@ class CreepManager {
                 case ERR_NOT_ENOUGH_RESOURCES: return 'ERR_NOT_ENOUGH_RESOURCES'
                 case ERR_NOT_FOUND: return 'ERR_NOT_FOUND'
                 case ERR_NOT_OWNER: return 'ERR_NOT_OWNER'
-                case ERR_NOT_IN_RANGE: return 'ERR_NOT_IN_RANGE'
                 case ERR_NO_BODYPART: return 'ERR_NO_BODYPART'
                 case ERR_NO_PATH: return 'ERR_NO_PATH'
-                case ERR_NO_BODYPART: return 'ERR_NO_BODYPART'
                 default: return result.toString()
             }
         }
@@ -795,7 +788,7 @@ class CreepManager {
             }
         }
 
-        return result
+        return result as ScreepsReturnCode
     }
 
     private executeHarvest(target: Source, workPower: number): ScreepsReturnCode {
@@ -1264,7 +1257,7 @@ class CreepManager {
                     return ERR_BUSY
                 }
 
-                return result
+                return result as ScreepsReturnCode
             }
 
 
@@ -1275,26 +1268,19 @@ class CreepManager {
     }
 
     private executeScout(target: RoomPosition): ScreepsReturnCode {
-        // console.log(this.creep.name, 'scout', target, this.creep.room.name)
-
         if (target.roomName === this.creep.room.name) {
-            // console.log(this.creep.name, 'scout already in target room', target.roomName, this.creep.room.name)
             return OK
         }
 
         if (target.roomName !== this.creep.room.name) {
-            // console.log('scout not in target room', target.roomName, this.creep.room.name)
             return ERR_NOT_IN_RANGE
         }
 
         const nextRoom = this.manager.getUnseenAdjacentRooms()
-            // randomize the order of the rooms
             .sort(() => Math.random() - 0.5)
             .shift()
 
         if (nextRoom) {
-            // console.log(this.creep.name, 'scout next room', nextRoom)
-
             this.creep.addTask({
                 action: 'scout',
                 pos: { x: 25, y: 25, roomName: nextRoom }
@@ -1304,13 +1290,10 @@ class CreepManager {
         }
 
         const nextStaleRoom = this.manager.getUnseenRoomsIfStale()
-            // randomize the order of the rooms
             .sort(() => Math.random() - 0.5)
             .shift()
 
         if (nextStaleRoom) {
-            // console.log('scout next stale room', nextStaleRoom)
-
             this.creep.addTask({
                 action: 'scout',
                 pos: { x: 25, y: 25, roomName: nextStaleRoom }
@@ -1319,14 +1302,10 @@ class CreepManager {
             return ERR_NOT_IN_RANGE
         }
 
-        // console.log('scout no next room or stale room found, fallback to home room')
-
         return OK
     }
 
     private creepFindTasks(): void {
-        this.creep.tasks = []
-
         if (this.creep.hasTasks() || this.creep.spawning) {
             return
         }
@@ -1358,7 +1337,6 @@ class CreepManager {
 
         if (this.manager.config.debug) this.manager.log('manageCreeps', `\n#5aff6f[##${this.creep.name} processing tasks:##] `, this.creep.tasks.map(t => t.action).join(', '))
 
-        //if (this.creep.name === 'H1') this.creep.tasks = []
         this.creepFindTasks()
 
         const myFlag = Object.values(Game.flags).find(f => f.name === this.creep.name)

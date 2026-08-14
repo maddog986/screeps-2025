@@ -1,5 +1,4 @@
 import { CONFIG } from 'config'
-import { get } from 'http'
 
 export const TASK_ACTIONS = ['harvest', 'transfer', 'upgrade', 'renew', 'recycle', 'build', 'withdraw', 'pickup', 'repair', 'attack', 'move', 'scout', 'claim'] as const
 export const CREEP_ROLES = ['harvester', 'upgrader', 'mule', 'defender', 'builder', 'scout', 'claimer'] as const
@@ -77,7 +76,6 @@ class RoomHivemind {
     constructionSites: ConstructionSite[] = []
     controller: StructureController | undefined
     controllerLevel: number = 0
-    creepCompletedActions: Record<string, Set<ActionTypes>> = {}
     creeps: Creep[] = []
     creepsByRole: Record<string, Creep[]> = {}
     creepsByTask: Record<TaskAction, Creep[]> = {
@@ -120,11 +118,11 @@ class RoomHivemind {
                 max: 0,
             },
             scout: {
-                body: [],
+                body: [MOVE],
                 max: 0,
             },
             claimer: {
-                body: [],
+                body: [CLAIM, MOVE, MOVE],
                 max: 0,
             }
         }
@@ -146,10 +144,7 @@ class RoomHivemind {
     towers: StructureTower[] = []
     transfers: Record<string, number> = {}
     flags: Flag[] = []
-    refillableHistory: number[] = []
     spawn: StructureSpawn | undefined
-    containersFreeCapacity: number = 0
-    containersCapacity: number = 0
     hostileStructures: StructureTower[] = []
     threatLevel: number = 0
     links: StructureLink[] = []
@@ -222,27 +217,9 @@ class RoomHivemind {
                 }
                 if (structure.structureType === STRUCTURE_CONTAINER) {
                     this.containers.push(structure)
-                    if (structure.pos.getRangeToCached(this.controller!.pos) <= 7) {
-                        this.containersNearController.push(structure)
-                    }
-                    if (structure.pos.getRangeToCached(this.spawn!.pos) <= 3) {
-                        this.containersNearSpawns.push(structure)
-                    }
-                    if (structure.pos.getRangeToCached(this.sources[0].pos) <= 2) {
-                        this.containersNearSources.push(structure)
-                    }
                 }
                 if (structure.structureType === STRUCTURE_LINK && structure.my === true) {
                     this.links.push(structure)
-                    if (structure.pos.getRangeToCached(this.controller!.pos) <= 6) {
-                        this.linksNearController.push(structure)
-                    }
-                    if (structure.pos.getRangeToCached(this.spawn!.pos) <= 4) {
-                        this.linksNearSpawns.push(structure)
-                    }
-                    if (structure.pos.getRangeToCached(this.sources[0].pos) <= 4) {
-                        this.linksNearSources.push(structure)
-                    }
                 }
                 if ('my' in structure && structure.my === true) {
                     this.myStructures.push(structure)
@@ -255,7 +232,30 @@ class RoomHivemind {
                 }
             }
 
-            console.log('sources:', this.sources.map(s => s.id))
+            // Classify after the scan so spawn/controller exist regardless of FIND_STRUCTURES order
+            for (const container of this.containers) {
+                if (this.controller && container.pos.getRangeToCached(this.controller.pos) <= 7) {
+                    this.containersNearController.push(container)
+                }
+                if (this.spawns.some(spawn => container.pos.getRangeToCached(spawn.pos) <= 3)) {
+                    this.containersNearSpawns.push(container)
+                }
+                if (this.sources.some(source => container.pos.getRangeToCached(source.pos) <= 2)) {
+                    this.containersNearSources.push(container)
+                }
+            }
+
+            for (const link of this.links) {
+                if (this.controller && link.pos.getRangeToCached(this.controller.pos) <= 6) {
+                    this.linksNearController.push(link)
+                }
+                if (this.spawns.some(spawn => link.pos.getRangeToCached(spawn.pos) <= 4)) {
+                    this.linksNearSpawns.push(link)
+                }
+                if (this.sources.some(source => link.pos.getRangeToCached(source.pos) <= 4)) {
+                    this.linksNearSources.push(link)
+                }
+            }
         }
 
         // owned room data
@@ -275,17 +275,6 @@ class RoomHivemind {
         }
 
         this.manageCreeps()                 // manage creeps
-    }
-
-    maxBodyParts(bodyParts: BodyPartConstant[], limit: number = 800): BodyPartConstant[] {
-        const cost = (bodyParts: BodyPartConstant[]) => bodyParts.reduce((sum, part) => sum + BODYPART_COST[part], 0)
-        let body = [...bodyParts]
-
-        while (cost(body.concat(bodyParts)) <= Math.min(limit, this.energyCapacityAvailable)) {
-            body = body.concat(bodyParts)
-        }
-
-        return body
     }
 
     private manageCreepsSetup() {
@@ -309,15 +298,15 @@ class RoomHivemind {
             max: 0
         }
 
-        this.creepsSetup.harvester.max += 1 // this.sourceWalkablePositionsTotal
+        this.creepsSetup.harvester.max += 1
 
-        //this.creepsSetup.mule.max += this.containersNearSources.length >= 1 ? 1 : 0
-        //this.creepsSetup.mule.max += this.containersNearSpawns.length >= 1 ? 1 : 0
-        //this.creepsSetup.mule.max += this.containersNearController.length >= 1 ? 1 : 0
+        this.creepsSetup.mule.max += this.containersNearSources.length >= 1 ? 1 : 0
+        this.creepsSetup.mule.max += this.containersNearSpawns.length >= 1 ? 1 : 0
+        this.creepsSetup.mule.max += this.containersNearController.length >= 1 ? 1 : 0
 
-        //this.creepsSetup.upgrader.max += this.controllerLevel >= 2.1 ? 1 : 0
+        this.creepsSetup.upgrader.max += this.controllerLevel >= 2.1 ? 1 : 0
 
-        //this.creepsSetup.builder.max += this.containers.length > 0 && this.constructionSites.length >= 1 ? 1 : 0
+        this.creepsSetup.builder.max += this.containers.length > 0 && this.constructionSites.length >= 1 ? 1 : 0
 
         if (this.config.debug) this.log('manageRoles', `\n#5aff6f[##manageRoles##]`, this.creepsSetup)
     }
@@ -353,7 +342,6 @@ class RoomHivemind {
                 if (!doWeOwnIt) {
                     // get sources from remote room
                     this.remoteSources = room.manager.sources
-                    console.log('remoteSources:', this.remoteSources.map(s => s.id))
                 }
 
                 if (doWeOwnIt && room.manager.constructionSites.some(cs => cs.structureType === STRUCTURE_SPAWN)) {
@@ -387,30 +375,8 @@ class RoomHivemind {
     }
 
     public getAdjacentRooms(): string[] {
-        const match = this.room.name.match(/([WE])(\d+)([NS])(\d+)/)
-        if (!match) return []
-
-        const [, ew, x, ns, y] = match
-        const xNum = parseInt(x, 10)
-        const yNum = parseInt(y, 10)
-
-        const adjacentRooms: string[] = []
-
-        const directions = [
-            { dx: -1, dy: 0 }, // West
-            { dx: 1, dy: 0 },  // East
-            { dx: 0, dy: -1 }, // South
-            { dx: 0, dy: 1 },  // North
-        ]
-
-        for (const { dx, dy } of directions) {
-            const newX = xNum + dx
-            const newY = yNum + dy
-            const newRoom = `${ew}${newX}${ns}${newY}`
-            adjacentRooms.push(newRoom)
-        }
-
-        return adjacentRooms
+        const exits = Game.map.describeExits(this.room.name)
+        return exits ? Object.values(exits) : []
     }
 
     public getUnseenAdjacentRooms(): string[] {
@@ -418,15 +384,14 @@ class RoomHivemind {
     }
 
     public getUnseenRoomsIfStale(): string[] {
-        return this.getAdjacentRooms().filter(room => {
-            // Check if the room is not visible
-            if (!Game.rooms[room]) return true
+        return this.getAdjacentRooms().filter(roomName => {
+            if (Game.rooms[roomName]) return false
 
-            // If visible, check the memory for last visit time
-            const lastVisited = Game.rooms[room].memory.lastSeen || 0
-            const threatLevel = Game.rooms[room].memory.threatLevel || 0
+            const memory = Memory.rooms[roomName]
+            if (!memory?.lastSeen) return true
 
-            return (Game.time - lastVisited) >= (threatLevel > 1 ? 300 : 150)
+            const staleAfter = (memory.threatLevel ?? 0) > 1 ? 300 : 150
+            return (Game.time - memory.lastSeen) >= staleAfter
         })
     }
 
@@ -602,8 +567,6 @@ class RoomHivemind {
         if (this.config.debug) this.startLogs('manageCreeps')
         if (this.config.debug) this.log('manageCreeps', `#00fff4[**manageCreeps:**] total: ${this.creeps.length}`)
 
-        const totalMules = this.creepsByRole.mule.filter(c => !c.spawning).length
-
         // pickup resources
         for (const resource of this.droppedResources) {
             if (this.usedCapacity(resource) === 0) continue
@@ -745,7 +708,7 @@ class RoomHivemind {
 
             if (spawn.spawning || this.energyAvailable < 200) {
                 if (this.config.debug) this.log('manageSpawns', `  - **spawning** or **usedCapacity** < 200`)
-                return
+                continue
             }
 
             const role = CREEP_ROLES.find(role => {
@@ -924,8 +887,6 @@ class RoomHivemind {
                 if (type === "terrain" && terrain === "wall") return true
                 return false
             })
-
-            return true
         }
 
         const findOptimalPlacement = (

@@ -79,6 +79,8 @@ const bunker1 = {                // build orders
     ]
 }
 
+// Per-room entries below (W8N3 / W7N3 / W7N4) are the original shard rooms.
+// Replace them with your rooms and spawnPos before deploying. `default` covers sim and anything else.
 export const CONFIG: Config = {
     visuals: {                                 // visuals
         enabled: true,                         // enable/disable visuals
