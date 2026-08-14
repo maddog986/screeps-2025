@@ -292,26 +292,16 @@ class Creep {
         return C.OK
     }
     _registerMove(targetPos) {
-        if (this.pos.x === targetPos.x && this.pos.y === targetPos.y) return C.OK
-        const cur = Math.max(Math.abs(this.pos.x - targetPos.x), Math.abs(this.pos.y - targetPos.y))
-        // Pick the neighbor that most reduces Chebyshev distance. Ignore creep
-        // occupancy for the score (creeps may vacate) but prefer an unoccupied tile
-        // on ties so we route around when there is a free alternative. If the only
-        // distance-reducing tile is occupied, we still aim at it and get blocked at
-        // resolution -> OK returned but no movement.
-        let best = null, bestScore = Infinity, bestOcc = true
-        for (const [dx, dy] of DIR_LIST) {
-            const nx = this.pos.x + dx, ny = this.pos.y + dy
-            if (!this.room._terrainStructWalkable(nx, ny)) continue
-            const score = Math.max(Math.abs(nx - targetPos.x), Math.abs(ny - targetPos.y))
-            const occ = !!this.room._creepAt(nx, ny, this)
-            if (score < bestScore || (score === bestScore && bestOcc && !occ)) {
-                bestScore = score; best = [nx, ny]; bestOcc = occ
-            }
-        }
-        if (!best) return C.ERR_NO_PATH
-        if (bestScore >= cur) return C.OK // no progress available this tick; stay
-        this._setIntent(best[0], best[1])
+        if (this.pos.getRangeTo(targetPos) <= 1) return C.OK // already adjacent; nothing to do
+        // Real pathfinding for the next step: route around walls/structures AND
+        // creeps when possible (like moveTo with ignoreCreeps=false). If creeps
+        // fully block the route, fall back to a path that ignores creeps and aim
+        // through them — the step may be blocked at end-of-tick resolution, so OK
+        // is returned but the creep does not move (the OK != moved nuance).
+        let step = this.room._stepToward(this.pos, targetPos, true, this)
+        if (!step) step = this.room._stepToward(this.pos, targetPos, false, this)
+        if (!step) return C.OK // boxed in this tick; stay
+        this._setIntent(step.x, step.y)
         return C.OK
     }
     _setIntent(x, y) {
@@ -480,6 +470,35 @@ class Room {
         for (const c of this._creepsHere()) if (c !== exclude && c.pos.x === x && c.pos.y === y) return c
         return null
     }
+    // BFS returning the first step tile along a shortest path that ends adjacent
+    // (range 1) to target. avoidCreeps=true routes around other creeps; when that
+    // fails callers retry with avoidCreeps=false to at least aim through them.
+    _stepToward(from, target, avoidCreeps, mover) {
+        const walk = (x, y) => this._terrainStructWalkable(x, y) && (!avoidCreeps || !this._creepAt(x, y, mover))
+        const isGoal = (x, y) => Math.max(Math.abs(x - target.x), Math.abs(y - target.y)) <= 1
+        if (isGoal(from.x, from.y)) return null
+        const visited = new Set([`${from.x},${from.y}`])
+        const queue = []
+        for (const [dx, dy] of DIR_LIST) {
+            const nx = from.x + dx, ny = from.y + dy
+            if (!walk(nx, ny)) continue
+            visited.add(`${nx},${ny}`)
+            queue.push({ x: nx, y: ny, first: { x: nx, y: ny } })
+        }
+        let head = 0
+        while (head < queue.length && head < 4000) {
+            const node = queue[head++]
+            if (isGoal(node.x, node.y)) return node.first
+            for (const [dx, dy] of DIR_LIST) {
+                const nx = node.x + dx, ny = node.y + dy
+                const key = `${nx},${ny}`
+                if (visited.has(key) || !walk(nx, ny)) continue
+                visited.add(key)
+                queue.push({ x: nx, y: ny, first: node.first })
+            }
+        }
+        return null
+    }
     _isWalkable(x, y, mover) {
         if (x < 1 || y < 1 || x > 48 || y > 48) return false
         if (this._terrainAt(x, y) === 'wall') return false
@@ -595,10 +614,23 @@ function installGlobals() {
 }
 
 function createWorld({ username = 'HivemindDev', roomName = 'sim', spawnPos = { x: 20, y: 26 },
-    controllerPos = { x: 30, y: 20 }, sources = [{ x: 15, y: 15 }, { x: 25, y: 35 }] } = {}) {
+    controllerPos = { x: 30, y: 20 }, sources = [{ x: 15, y: 15 }, { x: 25, y: 35 }],
+    sourceOpenTiles = 2 } = {}) {
     // terrain: border walls only, rest plain
     const terrain = new Array(50 * 50).fill(0)
     for (let i = 0; i < 50; i++) { terrain[i] = 1; terrain[49 * 50 + i] = 1; terrain[i * 50] = 1; terrain[i * 50 + 49] = 1 }
+
+    // Constrain each source's mining spots the way real rooms do (walls hug the
+    // source, leaving only a couple of open tiles). Without this every source has
+    // 8 open tiles and harvester over-assignment/eviction never triggers, hiding
+    // the real "harvesters wander looking for a free spot" dynamic.
+    const dirs8 = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]]
+    for (const s of sources) {
+        const neighbors = dirs8.map(([dx, dy]) => ({ x: s.x + dx, y: s.y + dy }))
+            .filter(p => p.x > 0 && p.y > 0 && p.x < 49 && p.y < 49)
+            .sort((a, b) => (Math.abs(a.x - spawnPos.x) + Math.abs(a.y - spawnPos.y)) - (Math.abs(b.x - spawnPos.x) + Math.abs(b.y - spawnPos.y)))
+        neighbors.slice(sourceOpenTiles).forEach(p => { terrain[p.y * 50 + p.x] = 1 }) // wall all but the N closest-to-spawn tiles
+    }
 
     world = {
         username, rooms: {}, creeps: {}, byId: {}, pendingSpawns: [],
