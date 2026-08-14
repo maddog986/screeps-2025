@@ -22,6 +22,19 @@ function arg(name, def) {
 const TICKS = parseInt(arg('ticks', '200'), 10)
 const SNAP = parseInt(arg('snapshot', '25'), 10)
 const VERBOSE = !!arg('verbose', false)
+const SEED = parseInt(arg('seed', '12345'), 10)
+
+// Deterministic RNG so before/after comparisons are reproducible. The bot
+// calls Math.random() for task-score jitter; seed it for stable runs.
+function mulberry32(a) {
+    return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0
+        let t = Math.imul(a ^ (a >>> 15), 1 | a)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+}
+Math.random = mulberry32(SEED)
 
 engine.installGlobals()
 const world = engine.createWorld({ spawnPos: { x: 20, y: 26 } })
