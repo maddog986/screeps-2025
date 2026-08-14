@@ -67,10 +67,10 @@ const bunker1 = {                // build orders
         '  EE EE  ',
         ' EEE ETE ',
         ' EE  CEE ',
-        '    A    ',
+        '   SA    ',
         ' EEC  EE ',
         ' E E E   ',
-        '         ', // 20 extensions max
+        '         ', // 20 extensions max + storage
     ],
     5: [
         '  .. ..  ',

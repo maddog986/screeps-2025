@@ -35,10 +35,10 @@ Bodies scale with `energyCapacityAvailable`. Quotas react to what the room alrea
 
 | Role | When it spawns | Job |
 | --- | --- | --- |
-| `harvester` | 2–4 generalists before source containers; then 1 per source | Mine sources. Dump into nearby containers/links. Will upgrade/build/haul if those specialists do not exist yet. |
-| `mule` | +1 per source container, +1 if a spawn container exists, +1 controller container at RCL 3+ | Move energy: source containers → spawn/extensions/towers → controller container. |
-| `builder` | Any construction sites (2 if there are 3+ sites and containers) | Build the bunker and roads. |
-| `upgrader` | RCL 2+ (2 at RCL 4 with a controller container) | Sit on the controller and pull from the nearby container/link. |
+| `harvester` | RCL 1: several 200-energy WCM generalists. 5W miners only after 5 extensions, a source container, and a hauler | Mine, upgrade, and build until specialists exist. Then sit on sources. |
+| `mule` | First cheap hauler after a source container and 2 workers. More only at 550+ capacity | Source containers → spawn/extensions → storage (RCL 4) → controller. |
+| `builder` | RCL 2+ when sites exist (generalists build at RCL 1) | Bunker and roads. |
+| `upgrader` | RCL 2+ (still a 200-energy body until 550 capacity) | Controller. |
 | `defender` | Threat level ≥ 2 | Attack hostiles in this room, or travel to a threatened help room. |
 | `scout` | RCL 3+, safe, `CONFIG.autonomy.explore` | Walk adjacent rooms so `Memory.rooms` stays fresh. |
 | `claimer` | RCL 4+, safe, spare GCL, and an expansion target, `CONFIG.autonomy.expand` | Claim or reserve the next target. |
@@ -218,6 +218,6 @@ This session already has the repo in context. You can also just say "go" here.
 ## Known gaps
 
 - Squad idle movement uses a hardcoded coordinate.
-- Bunker stencil is filled through RCL 5. Storage, terminal, and later structures are in the letter map but not in the current layout.
-- Expansion picks the nearest safe scouted neighbor; it does not yet score mineral type, source count, or remote distance beyond one hop.
+- Bunker stencil includes storage at RCL 4. Terminal and later structures are in the letter map but not in the current layout.
+- Expansion scores source count, threat, and distance. Mineral type is not scored yet.
 - Scoring weights still need live tuning. The design is emergent (highest-score task wins), not a scripted RCL checklist.
