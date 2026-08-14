@@ -41,3 +41,12 @@ The game engine is not available locally, so `require('./dist/main.js')` directl
 ### Node
 
 `.nvmrc` pins Node 18.18.0 but `package.json` engines allow `18.x || 20.x || 22.x`; the bot builds and runs fine on Node 22.
+
+### Local simulator (observe creep behavior without a Screeps server)
+
+`npm run sim` builds the bot and runs it against a lightweight local Screeps engine mock (`tools/sim/`), so you can watch decision-making (task selection, idling, wandering, energy flow) at high speed and get analytics. It boots a room with a spawn at `20,26`, two sources, and a controller, then prints per-role flaw metrics (idle%, task switches, steps, actions) plus an energy ledger.
+
+- Args: `npm run sim -- --ticks=1000 --snapshot=100 [--verbose]`.
+- `tools/sim/engine.js` is the world/API mock; `tools/sim/run.js` is the driver + analytics. See the header comment in `engine.js` for fidelity notes.
+- Fidelity: it runs the REAL compiled bot each tick, so targeting/assignment/idle flaws are trustworthy. Movement is greedy (not Screeps' exact A*), and combat/minerals/links/fatigue are not modeled — use it for economy/behavior, not literal path-length tuning. Real behavior must still be confirmed in the Screeps simulator.
+- Important sim detail: real Screeps recreates `Game` objects every tick (which resets the bot's per-tick caches like `CreepManager.creepCompletedActions`). The runner emulates this by clearing cached `creep._manager`/`room._manager` before each tick — do not remove that or creeps will "freeze" after one action.

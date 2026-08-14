@@ -15,6 +15,7 @@
     "watch-pserver": "rollup -cw --bundleConfigAsCjs --environment DEST:pserver",
     "watch-season": "rollup -cw --bundleConfigAsCjs --environment DEST:season",
     "watch-sim": "rollup -cw --bundleConfigAsCjs --environment DEST:sim",
+    "sim": "rollup -c && node tools/sim/run.js",
     "cli": "docker exec -i screeps-docker-screeps-1 npx screeps cli"
   },
   "repository": {
