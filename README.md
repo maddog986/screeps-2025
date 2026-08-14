@@ -174,7 +174,7 @@ npm run lint
 
 ## CI: push to the Screeps simulator
 
-`.github/workflows/deploy-sim.yml` builds the bundle and uploads it to the Screeps **`sim`** branch on every push or pull request to `hivemind`. That is the branch the in-game simulator runs.
+`.github/workflows/deploy-sim.yml` builds the bundle and uploads it to the Screeps **`sim`** branch on every push to `hivemind` or `cursor/**` (Cloud Agent branches). That is the branch the in-game simulator runs. It uses `push` rather than `pull_request` so the `SCREEPS_TOKEN` repository secret is available.
 
 One-time setup:
 
@@ -184,7 +184,9 @@ One-time setup:
    `https://github.com/maddog986/screeps-2025/settings/secrets/actions`
 4. In the simulator, set the active branch to **sim**.
 
-After that, each merge to `hivemind` and each PR against it overwrites `sim`. Use **Actions → Deploy to Screeps sim → Run workflow** to push `sim` or `main` by hand.
+After that, each push to `hivemind` or a `cursor/**` branch overwrites `sim`. Use **Actions → Deploy to Screeps sim → Run workflow** to push `sim` or `main` by hand.
+
+`SCREEPS_TOKEN` must be a **repository** secret (Settings → Secrets and variables → Actions → Repository secrets). Environment secrets are not visible to this job.
 
 The token is read from the environment (`SCREEPS_TOKEN`). It is never committed. `screeps.json` stays local-only.
 

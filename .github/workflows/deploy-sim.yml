@@ -1,10 +1,12 @@
 name: Deploy to Screeps sim
 
+# Push events receive repository secrets. pull_request often does not when the
+# PR is opened by an app (Cloud Agents), which is why the first run saw an empty token.
 on:
   push:
-    branches: [hivemind]
-  pull_request:
-    branches: [hivemind]
+    branches:
+      - hivemind
+      - 'cursor/**'
   workflow_dispatch:
     inputs:
       branch:
@@ -41,10 +43,10 @@ jobs:
           SCREEPS_TOKEN: ${{ secrets.SCREEPS_TOKEN }}
         run: |
           if [ -z "$SCREEPS_TOKEN" ]; then
-            echo "::error::Add a repository secret named SCREEPS_TOKEN."
+            echo "::error::SCREEPS_TOKEN is empty. It must be a *repository* secret (not an Environment secret)."
             echo "Create a full-access token at https://screeps.com/a/#!/account/auth-tokens"
             echo "Then add it at https://github.com/${GITHUB_REPOSITORY}/settings/secrets/actions"
-            echo "Also create a 'sim' branch once in the Screeps client (Script tab) if it does not exist."
+            echo "Name it exactly SCREEPS_TOKEN. Also create a 'sim' branch in the Screeps Script tab if needed."
             exit 1
           fi
 
