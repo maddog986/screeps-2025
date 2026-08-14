@@ -1,4 +1,5 @@
 import { CONFIG } from 'config'
+import { resolveColonyPolicy, type ColonyPhase, type ColonyPolicy, type RoomSnapshot } from 'colony_phase'
 
 export const TASK_ACTIONS = ['harvest', 'transfer', 'upgrade', 'renew', 'recycle', 'build', 'withdraw', 'pickup', 'repair', 'attack', 'move', 'scout', 'claim'] as const
 export const CREEP_ROLES = ['harvester', 'mule', 'builder', 'upgrader', 'defender', 'scout', 'claimer'] as const
@@ -64,6 +65,7 @@ declare global { // using global declaration to extend the existing types
         sourceWalkablePositionsTotal: number
         owner: string
         threatLevel: number
+        phase?: ColonyPhase
     }
 }
 
@@ -154,6 +156,30 @@ class RoomHivemind {
     linksNearSources: StructureLink[] = []
     helpRooms: string[] = []
     wanted: boolean = false
+    phase: ColonyPhase = 'bootstrap'
+    policy: ColonyPolicy = resolveColonyPolicy({
+        rcl: 1,
+        controllerLevel: 1,
+        capacity: 300,
+        energy: 300,
+        extensions: 0,
+        sources: 1,
+        walkable: 2,
+        sourceContainers: 0,
+        spawnContainers: 0,
+        controllerContainers: 0,
+        hasStorage: false,
+        hasTower: false,
+        constructionSites: 0,
+        threat: 0,
+        harvesters: 0,
+        mules: 0,
+        autonomyExplore: false,
+        autonomyExpand: false,
+        canClaim: false,
+        hasExpansionTarget: false,
+        remoteSources: 0,
+    })
 
     constructor(public room: Room) {
         this.wanted = !!room.controller?.my || room.name in CONFIG.rooms || room.name === 'sim'
@@ -267,7 +293,8 @@ class RoomHivemind {
             this.tombstones = this.room.find(FIND_TOMBSTONES)
             this.droppedResources = this.room.find(FIND_DROPPED_RESOURCES)
 
-            this.manageCreepsSetup()
+            this.discoverRemoteSources()
+            this.applyColonyPolicy()
             this.manageTowers()             // attack enemies
             this.manageBuilding()           // calculate buildables
             this.manageRepairThreshold()    // adjust repair threshold
@@ -281,86 +308,74 @@ class RoomHivemind {
         this.manageCreeps()                 // manage creeps
     }
 
-    private earlyWorkerBody(capacity: number): BodyPartConstant[] {
-        if (capacity < 250) return [WORK, CARRY, MOVE]
-        if (capacity < 400) return [WORK, WORK, CARRY, MOVE]
-        return [WORK, WORK, CARRY, CARRY, MOVE, MOVE]
+    private buildSnapshot(): RoomSnapshot {
+        const ownedRoomCount = Object.values(Game.rooms).filter(r => r.controller?.my).length
+        return {
+            rcl: this.controller?.level ?? 0,
+            controllerLevel: this.controllerLevel,
+            capacity: this.energyCapacityAvailable,
+            energy: this.energyAvailable,
+            extensions: this.extensions.length,
+            sources: this.sources.length,
+            walkable: this.sourceWalkablePositionsTotal || this.sources.length * 2,
+            sourceContainers: this.containersNearSources.length,
+            spawnContainers: this.containersNearSpawns.length,
+            controllerContainers: this.containersNearController.length,
+            hasStorage: !!this.storage,
+            hasTower: this.towers.length > 0,
+            constructionSites: this.constructionSites.length,
+            threat: this.threatLevel,
+            harvesters: this.creepsByRole.harvester?.length ?? 0,
+            mules: this.creepsByRole.mule?.filter(c => !c.spawning).length ?? 0,
+            autonomyExplore: CONFIG.autonomy.explore,
+            autonomyExpand: CONFIG.autonomy.expand,
+            canClaim: Game.gcl.level > ownedRoomCount,
+            hasExpansionTarget: this.getExpansionTargets().length > 0,
+            remoteSources: this.remoteSources.length,
+        }
     }
 
-    private manageCreepsSetup() {
-        const capacity = this.energyCapacityAvailable
-        const rcl = this.controller?.level ?? 0
-        const sourceCount = Math.max(1, this.sources.length)
-        const walkable = this.sourceWalkablePositionsTotal || sourceCount * 2
-        const hasSourceContainers = this.containersNearSources.length > 0
-        const hasHaul = this.creepsByRole.mule.filter(c => !c.spawning).length > 0
-            || this.containersNearSpawns.length > 0
-            || !!this.storage
-        const ownedRoomCount = Object.values(Game.rooms).filter(r => r.controller?.my).length
-        const canClaimAnother = Game.gcl.level > ownedRoomCount
-        const expansionTarget = this.getExpansionTargets()[0]
+    private applyColonyPolicy() {
+        this.policy = resolveColonyPolicy(this.buildSnapshot())
+        this.phase = this.policy.phase
+        this.room.memory.phase = this.phase
 
-        // 5-WORK miners only after five extensions exist and something hauls.
-        // Until then the room stays on cheap generalists (200 energy at RCL 1).
-        const useStaticMiners = capacity >= 550 && this.extensions.length >= 5 && hasSourceContainers && hasHaul
+        if (!this.policy.allowRemotes) this.remoteSources = []
 
         this.creepsSetup.harvester = {
-            body: useStaticMiners
-                ? [WORK, WORK, WORK, WORK, WORK, CARRY, MOVE]
-                : this.earlyWorkerBody(capacity),
-            max: useStaticMiners
-                ? sourceCount
-                : Math.max(3, Math.min(walkable, capacity <= 300 ? 5 : 4))
+            body: this.policy.minerBody ?? this.policy.workerBody,
+            max: this.policy.harvesterMax,
         }
+        this.creepsSetup.mule = { body: this.policy.muleBody, max: this.policy.muleMax }
+        this.creepsSetup.builder = { body: this.policy.builderBody, max: this.policy.builderMax }
+        this.creepsSetup.upgrader = { body: this.policy.upgraderBody, max: this.policy.upgraderMax }
+        this.creepsSetup.defender = { body: this.policy.defenderBody, max: this.policy.defenderMax }
+        this.creepsSetup.scout = { body: [MOVE], max: this.policy.scoutMax }
+        this.creepsSetup.claimer = { body: [CLAIM, MOVE, MOVE, MOVE], max: this.policy.claimerMax }
 
-        this.creepsSetup.mule = {
-            body: capacity >= 400
-                ? this.buildCreepBody(Math.min(capacity, 600), { move: 1, carry: 2 })
-                : [CARRY, CARRY, MOVE],
-            max: 0
-        }
-        if (hasSourceContainers && this.creepsByRole.harvester.length >= 2) {
-            this.creepsSetup.mule.max = 1
-        }
-        if (capacity >= 550 && hasSourceContainers) {
-            this.creepsSetup.mule.max = Math.min(3,
-                this.containersNearSources.length
-                + (this.containersNearSpawns.length > 0 ? 1 : 0)
-                + (this.containersNearController.length > 0 && rcl >= 3 ? 1 : 0)
-                + (this.storage ? 1 : 0)
+        if (this.config.debug) this.log('manageRoles', `\n#5aff6f[##${this.phase}##]`, this.creepsSetup)
+    }
+
+    private discoverRemoteSources() {
+        this.remoteSources = []
+        if ((this.controller?.level ?? 0) < 3 || this.threatLevel >= 2) return
+
+        const myName = this.room.controller?.owner?.username
+        for (const name of this.getAdjacentRooms()) {
+            const room = Game.rooms[name]
+            if (!room) continue
+            if (room.controller?.my) continue
+            if (room.controller?.owner && room.controller.owner.username !== myName) continue
+            const armed = room.find(FIND_HOSTILE_CREEPS).some(c =>
+                c.getActiveBodyparts(ATTACK) > 0
+                || c.getActiveBodyparts(RANGED_ATTACK) > 0
+                || c.getActiveBodyparts(HEAL) > 0
             )
+            if (armed) continue
+            const sources = room.find(FIND_SOURCES)
+            if (!sources.length) continue
+            this.remoteSources.push(...sources)
         }
-
-        this.creepsSetup.builder = {
-            body: this.earlyWorkerBody(Math.min(capacity, 400)),
-            max: this.constructionSites.length === 0 || rcl < 2
-                ? 0
-                : (this.constructionSites.length >= 4 && capacity >= 550 ? 2 : 1)
-        }
-
-        this.creepsSetup.upgrader = {
-            body: capacity >= 550
-                ? this.buildCreepBody(Math.min(capacity, 800), { move: 1, work: 2, carry: 1 }, UPGRADE_CONTROLLER_POWER, 8)
-                : [WORK, CARRY, MOVE],
-            max: rcl < 2 ? 0 : (rcl >= 4 && (this.containersNearController.length > 0 || !!this.storage) ? 2 : 1)
-        }
-
-        this.creepsSetup.defender = {
-            body: this.buildCreepBody(560, { move: 2, attack: 2, tough: 1 }),
-            max: this.threatLevel >= 2 ? 1 : 0
-        }
-
-        this.creepsSetup.scout = {
-            body: [MOVE],
-            max: CONFIG.autonomy.explore && this.controllerLevel >= 3 && this.threatLevel === 0 ? 1 : 0
-        }
-
-        this.creepsSetup.claimer = {
-            body: [CLAIM, MOVE, MOVE, MOVE],
-            max: CONFIG.autonomy.expand && this.controllerLevel >= 4 && this.threatLevel === 0 && canClaimAnother && !!expansionTarget ? 1 : 0
-        }
-
-        if (this.config.debug) this.log('manageRoles', `\n#5aff6f[##manageRoles##]`, this.creepsSetup)
     }
 
     private manageNewClaim() {
@@ -386,7 +401,15 @@ class RoomHivemind {
             const doWeOwnIt = !!room.controller?.my
 
             if (!doWeOwnIt) {
-                this.remoteSources = room.manager.sources
+                if (this.policy.allowRemotes) {
+                    const before = this.remoteSources.length
+                    for (const source of room.manager.sources) {
+                        if (!this.remoteSources.some(s => s.id === source.id)) this.remoteSources.push(source)
+                    }
+                    if (before === 0 && this.remoteSources.length > 0) {
+                        this.creepsSetup.harvester.max += 1
+                    }
+                }
                 return
             }
 
@@ -1144,6 +1167,28 @@ class RoomHivemind {
             targetPositions.push(new RoomPosition(containerNearController.x, containerNearController.y, this.room.name))
         }
 
+        const linkLevel = this.config.build.auto_build_links_level ?? 5
+        if (this.controllerLevel >= linkLevel) {
+            const placeLink = (anchor: RoomPosition, range: number, level: number) => {
+                if (this.links.some(l => l.pos.getRangeTo(anchor) <= range + 1)) return
+                if (this.constructionSites.some(cs => cs.structureType === STRUCTURE_LINK && cs.pos.getRangeTo(anchor) <= range + 1)) return
+                if (buildableStructures.some(b => b.structure === STRUCTURE_LINK && new RoomPosition(b.x, b.y, this.room.name).getRangeTo(anchor) <= range + 1)) return
+
+                const pos = findOptimalPlacement(anchor, [...targetPositions, controllerPos], range)
+                if (!pos) return
+                buildableStructures.push({
+                    x: pos.x,
+                    y: pos.y,
+                    structure: STRUCTURE_LINK,
+                    level,
+                })
+            }
+
+            for (const spawn of this.spawns) placeLink(spawn.pos, 2, linkLevel)
+            for (const source of this.sources) placeLink(source.pos, 2, linkLevel)
+            if (this.controllerLevel >= 6) placeLink(controllerPos, 3, 6)
+        }
+
         // find a path from spawn to each target
         const roadPositions = planRoads(this.spawn!.pos, targetPositions, buildableStructures)
         roadPositions.forEach(position => {
@@ -1208,7 +1253,21 @@ class RoomHivemind {
 
             const result = this.room.createConstructionSite(buildable.x, buildable.y, buildable.structure as BuildableStructureConstant)
 
-            if (result === ERR_FULL || result === ERR_RCL_NOT_ENOUGH) {
+            if (result === ERR_FULL) {
+                if (this.config.debug) this.log('manageConstruction', `  - **paused:** ${buildable.structure} ${result}`)
+                break
+            }
+            else if (result === ERR_RCL_NOT_ENOUGH) {
+                const structureType = buildable.structure as BuildableStructureConstant
+                const rcl = this.controller?.level ?? 0
+                const allowed = CONTROLLER_STRUCTURES[structureType]?.[rcl] ?? 0
+                const existing = this.structures.filter(s => s.structureType === structureType).length
+                    + this.constructionSites.filter(s => s.structureType === structureType).length
+                if (allowed > 0 && existing >= allowed) {
+                    if (this.config.debug) this.log('manageConstruction', `  - **at cap:** ${buildable.structure}`)
+                    this.room.memory.buildables.shift()
+                    continue
+                }
                 if (this.config.debug) this.log('manageConstruction', `  - **paused:** ${buildable.structure} ${result}`)
                 break
             }
@@ -1236,6 +1295,12 @@ class RoomHivemind {
 
     private manageVisuals() {
         if (!CONFIG.visuals.enabled) return
+
+        this.room.visual.text(`Phase:${this.phase}`, 3, 22.5, {
+            font: 0.5,
+            color: '#00fff4',
+            align: 'left',
+        })
 
         this.room.visual.text(`RT:${this.room.repairThreshold.toFixed(5)}`, 3, 23, {
             font: 0.5,

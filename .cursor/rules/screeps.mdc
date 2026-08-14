@@ -12,8 +12,9 @@ Read `README.md` and `docs/STRATEGY.md` before changing behavior. Prefer evolvin
 ## Architecture (do not fight this)
 
 - `src/main.ts` — tick loop only.
-- `src/room_hivemind.ts` — room census, spawn quotas, towers, links, bunker planner, expansion targets. Constructed on first `room.manager` access.
-- `src/creep_manager.ts` — score legal tasks, execute one work + one transfer per tick.
+- `src/colony_phase.ts` — snapshot → `bootstrap | grow | operate | expand` → spawn quotas, bodies, remotes, task weights.
+- `src/room_hivemind.ts` — room census, apply colony policy, towers, links, bunker planner, expansion targets. Constructed on first `room.manager` access.
+- `src/creep_manager.ts` — score legal tasks (multiplied by phase weights), execute one work + one transfer per tick.
 - `src/squads.ts` — unfinished combat grouping. Do not build new combat on top of the hardcoded idle tile without fixing it.
 - `src/prototypes.ts` — `room.manager`, `creep.tasks`, cached ranges.
 - `src/config.ts` — visuals, `autonomy.explore` / `expand`, per-room bunker + `spawnPos`.
@@ -42,11 +43,11 @@ Ship one vertical slice per PR. Watch the sim. Then the next slice.
 
 Priority order unless the user says otherwise:
 
-1. **Bootstrap** — a lone spawn must reach RCL 2 with containers without getting stuck (idle creeps, empty spawn, no sites).
-2. **Economy** — static miners once containers exist; mules keep spawn full; upgraders only spend surplus.
-3. **Bunker** — stencil through RCL 4–5 (storage, second tower, links). Storage becomes the energy hub.
-4. **Expansion scoring** — prefer 2-source, low-threat, nearby rooms over "first name in CONFIG".
-5. **Remotes** — harvest adjacent sources before a second claim if GCL is tight.
+1. **Bootstrap** — `colony_phase` bootstrap must reach RCL 2: cheap WCM, fill spawn, upgrade, then containers.
+2. **Economy** — grow/operate: mule after source container; 5W miners only at 550 + 5 ext + haul.
+3. **Bunker** — stencil through RCL 6 (storage, towers, links, terminal). Storage becomes the energy hub.
+4. **Remotes** — operate/expand harvest adjacent visible unowned sources before a second claim.
+5. **Expansion scoring** — prefer 2-source, low-threat, nearby rooms over "first name in CONFIG".
 6. **Defense** — towers first; defenders only when threat ≥ 2; fix squad idle.
 7. **CPU** — path cache, cheaper census, less debug HTML.
 

@@ -299,7 +299,8 @@ class CreepManager {
             const distanceFactor = ((isSlowMover ? 0.5 : 1) - ((distance / 50) * 3)) * 0.35
             priorityFactor *= 0.35
 
-            const score = priorityFactor + distanceFactor + (Math.random() * 0.05)
+            const weight = this.manager.policy.taskWeight[task] ?? 1
+            const score = (priorityFactor + distanceFactor + (Math.random() * 0.05)) * weight
 
             if (this.manager.config.debug) this.manager.log('manageCreeps', `  - **${score.toFixed(2)}** ${target} **priorityFactor:** ${priorityFactor.toFixed(2)} **distanceFactor:** ${distanceFactor.toFixed(2)}`)
 
@@ -445,6 +446,15 @@ class CreepManager {
         score += ((walkablePositions + 1) / (assignedHarvesters + 1)) * 0.05
         score += (this.creep.role === 'harvester') ? 15 : 0 // harvesters get a bonus for harvesting
 
+        const isRemote = !this.manager.sources.some(s => s.id === target.id)
+        if (isRemote) {
+            const localSaturated = this.manager.sources.every(s => {
+                const assigned = this.manager.creepsByTask.harvest.filter(c => c.hasTask('harvest', s.id)).length
+                return assigned >= s.walkablePositions
+            })
+            score += localSaturated ? 12 : -20
+        }
+
         return score
     }
 
@@ -464,8 +474,14 @@ class CreepManager {
         score += target.structureType === STRUCTURE_WALL ? 1 : 0
         score += target.structureType === STRUCTURE_CONTAINER ? 4 : 0
         score += target.structureType === STRUCTURE_STORAGE ? 8 : 0
+        score += target.structureType === STRUCTURE_LINK ? 6 : 0
+        score += target.structureType === STRUCTURE_TERMINAL ? 5 : 0
         score += target.structureType === STRUCTURE_RAMPART ? 0.5 : 0
         score += (target.progress / target.progressTotal) * 2
+
+        if (this.manager.phase === 'bootstrap' && target.structureType !== STRUCTURE_SPAWN) {
+            score *= 0.45
+        }
 
         return score
     }
@@ -482,6 +498,7 @@ class CreepManager {
         score += target instanceof StructureSpawn ? 5 : 0
         score += target instanceof StructureExtension ? 3 : 0
         score += target instanceof StructureTower ? 10 : 0
+        if (this.manager.phase === 'bootstrap' && target instanceof StructureSpawn) score += 4
 
         // score += (task === 'transfer' && !actAsMule && isNearSpawn) ? -10 : 0 // let mules handle the transfer near spawns
 
@@ -500,6 +517,7 @@ class CreepManager {
 
         score += this.creep.workPower('upgrade') > this.manager.usedCapacity(this.creep) ? -100 : 0
         score += this.creep.role === 'upgrader' ? 10 : 0
+        if (this.manager.phase === 'bootstrap') score += 2
 
         score += (this.creep.role === 'harvester' && this.manager.creepsByRole.upgrader.length > 2) ? -10 : 0
 
